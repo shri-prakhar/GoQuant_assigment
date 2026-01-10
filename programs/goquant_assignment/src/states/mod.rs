@@ -1,5 +1,5 @@
-pub mod vault;
 pub mod events;
+pub mod vault;
 
-pub use vault::*;
 pub use events::*;
+pub use vault::*;
