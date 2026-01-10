@@ -33,6 +33,10 @@ pub fn lock_collateral_handler(ctx: Context<LockCollateral>, amount: u64) -> Res
     );
 
     let vault = &mut ctx.accounts.vault;
+    require!(
+        vault.available_balance >= amount,
+        VaultError::InsufficientBalance
+    );
     vault.locked_balance = vault
         .locked_balance
         .checked_add(amount)

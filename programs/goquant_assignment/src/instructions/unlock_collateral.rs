@@ -17,3 +17,7 @@ pub struct UnLockCollateral<'info> {
     ///CHECK: will be check later
     pub authority_program: UncheckedAccount<'info>,
 }
+
+pub fn unlock_collateral_handler(ctx: Context<UnLockCollateral>, amount: u64) -> Result<()> {
+    Ok(())
+}
