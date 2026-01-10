@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     error::VaultError,
-    states::{vault, CollateralVault, LockEvent, VaultAuthority},
+    states::{CollateralVault, LockEvent, VaultAuthority},
 };
 
 #[derive(Accounts)]
