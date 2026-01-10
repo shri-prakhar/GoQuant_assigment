@@ -1,3 +1,4 @@
+pub mod add_authorized_program;
 pub mod deposit;
 pub mod initialize_vault;
 pub mod lock_collateral;
@@ -5,6 +6,7 @@ pub mod transfer_collateral;
 pub mod unlock_collateral;
 pub mod withdraw;
 
+pub use add_authorized_program::*;
 pub use deposit::*;
 pub use initialize_vault::*;
 pub use lock_collateral::*;

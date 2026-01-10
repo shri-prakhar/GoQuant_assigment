@@ -25,7 +25,7 @@ pub fn lock_collateral_handler(ctx: Context<LockCollateral>, amount: u64) -> Res
     require!(amount > 0, VaultError::InvalidAmount);
 
     let authorized_accounts = &ctx.accounts.vault_authority;
-    let caller_program_id = ctx.program_id;
+    //let caller_program_id = ctx.program_id;
 
     require!(
         authorized_accounts.is_program_authorized(&ctx.accounts.authority_program.key()),
