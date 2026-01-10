@@ -22,7 +22,14 @@ pub struct VaultAuthority{
   pub authorized_programs: Vec<Pubkey>,
   pub bump : u8
 }
-
+impl VaultAuthority{
+  pub const LEN : usize = 4 + ( 32 * 8 ) + 1; // 4 bytes are the vector length 
+}
+impl VaultAuthority{
+  pub fn is_program_authorized(&self , program: &Pubkey) -> bool{
+    self.authorized_programs.iter().any(|p| p == program)
+  }
+}
 
 #[derive(Copy , Clone , AnchorSerialize , AnchorDeserialize , Debug)]
 pub struct TransactionRecord{

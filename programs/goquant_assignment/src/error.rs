@@ -19,6 +19,8 @@ pub enum VaultError{
   UnderFlow,
   #[msg("Program Not Authorized to perform this Operation")]
   ProgramNotAuthorized,
+  #[msg("Bump Not Found")]
+  BumpNotFound,
   #[msg("Vault has Open Positions - cannot withdraw locked collateral")]
   HasOpenPositions, 
 }
