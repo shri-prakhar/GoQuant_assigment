@@ -20,6 +20,7 @@ pub struct AddAuthorizedProgram<'info> {
     pub admin: Signer<'info>,
 }
 
+//for admin
 pub fn add_authorized_program_handler(
     ctx: Context<AddAuthorizedProgram>,
     program_id: Pubkey,
