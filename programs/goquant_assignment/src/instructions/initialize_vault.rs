@@ -36,8 +36,6 @@ pub struct InitializeVault<'info> {
     bump,
   )]
     pub vault_authority: Account<'info, VaultAuthority>,
-    pub vault_token_account: Account<'info, TokenAccount>,
-
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -57,6 +55,11 @@ pub fn initialize_vault_handler(ctx: Context<InitializeVault>) -> Result<()> {
     vault.created_at = clock.unix_timestamp;
     vault.bump = ctx.bumps.vault;
 
+    {
+        let va = &mut ctx.accounts.vault_authority;
+        va.bump = ctx.bumps.vault_authority;
+        va.authorized_programs = Vec::new();
+    }
     emit!(VaultInitializeEvent {
         user: vault.owner,
         vault: vault.key(),
