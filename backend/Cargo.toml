@@ -1,6 +1,76 @@
 [package]
 name = "backend"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
+# Core async runtime
+tokio.workspace = true
+
+# Web framework - Actix-Web for high performance
+actix-web = "4.4"
+actix-cors = "0.7"
+actix-web-actors = "4.2"
+actix-rt = "2.9"
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+
+sqlx.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Time handling
+chrono.workspace = true
+
+# Logging and tracing
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-actix-web = "0.7"
+
+# Environment variables
+dotenv = "0.15"
+
+# Solana SDK for blockchain interaction
+solana-sdk = "*"
+solana-client = "*"
+solana-program = "*"
+anchor-client = "0.32"
+anchor-lang = "0.32"
+
+# SPL Token
+spl-token = "*"
+spl-associated-token-account = "*"
+
+# Base58 encoding/decoding
+bs58 = "0.5"
+
+# UUID
+uuid.workspace = true
+
+# Shared crate
+shared = { path = "../shared" }
+
+# Caching for performance
+moka = { version = "0.12.12", features = ["future"] }
+
+# Metrics and monitoring
+prometheus = "*"
+
+# Rate limiting
+governor = "*"
+
+# Concurrency utilities
+num_cpus = "1.16"
+once_cell = "1.19"
+parking_lot = "0.12"
+dashmap = "*"
+
+[dev-dependencies]
+# Testing utilities
+reqwest = { version = "*", features = ["json"] }
+mockall = "*"
