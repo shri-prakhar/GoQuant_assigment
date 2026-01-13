@@ -1,8 +1,8 @@
-use chrono::{Utc};
+use chrono::Utc;
 use shared::{
     Alert, AuditTrailEntry, BalanceSnapshot, ReconciliationLog, TransactionRecord, TvlStats, Vault,
 };
-use sqlx::{postgres::PgPoolOptions,PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 
 #[derive(Clone)]
