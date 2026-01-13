@@ -1,5 +1,4 @@
-use anchor_lang::prelude::program_pack::Pack;
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{program_pack::Pack, pubkey::Pubkey};
 use spl_token::state::Account as TokenAccount;
 use std::str::FromStr;
 

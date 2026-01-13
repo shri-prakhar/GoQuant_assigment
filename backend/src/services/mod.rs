@@ -1,5 +1,6 @@
 pub mod balance_reconciler;
 pub mod balance_tracker;
+pub mod transaction_builder;
 pub mod vault_manager;
 pub mod vault_moniter;
 
@@ -9,6 +10,7 @@ pub use balance_reconciler::*;
 pub use balance_tracker::*;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
+pub use transaction_builder::*;
 pub use vault_manager::*;
 pub use vault_moniter::*;
 

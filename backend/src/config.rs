@@ -10,8 +10,8 @@ pub struct Config {
     pub program_id: Pubkey,
     pub max_db_connections: u32,
     pub cache_ttl_seconds: u32,
-    pub reconciliation_interval_seconds: u32,
-    pub monitoring_interval_seconds: u32,
+    pub reconciliation_interval_seconds: u64,
+    pub monitoring_interval_seconds: u64,
 }
 
 impl Config {
