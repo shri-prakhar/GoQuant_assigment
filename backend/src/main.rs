@@ -10,6 +10,7 @@ mod config;
 mod database;
 mod monitering;
 mod services;
+mod websocket;
 
 use config::Config;
 
@@ -38,7 +39,7 @@ async fn main() -> Result<(), std::io::Error>{
         .run_migrations()
         .await
         .expect("Failed to run migrations");
-    tracing::info!("✅ Database migrations completed");
+    tracing::info!("Database migrations completed");
 
     let cache = Cache::new(20_000);
     tracing::info!(" Cache initialized with 20,000 entry capacity");

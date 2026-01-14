@@ -61,7 +61,7 @@ impl VaultManager {
             .get_account(&pubkey)
             .map_err(|e| VaultError::SolanaRpcError(e.to_string()))?;
 
-        let vault_data = Self::parse_vault_data(&account.data)?;
+        let vault_data = Self::parse_vault_account(&account.data , vault_pubkey)?;
         state
             .database
             .upsert_vault(&vault_data)
@@ -306,8 +306,97 @@ impl VaultManager {
 
         Ok(vault)
     }
-    fn parse_vault_data(_data: &[u8]) -> Result<Vault, VaultError> {
-        Err(VaultError::NotImplemented("f".to_string()))
+    fn parse_vault_account(data: &[u8], vault_pubkey: &str) -> Result<Vault, VaultError> {
+        if data.len() < 8 {
+            return Err(VaultError::DeserializationError(
+                "Account data too short".to_string()
+            ));
+        }
+        
+        let vault_data = &data[8..];
+        
+        if vault_data.len() < 113 { // 32 + 32 + 8*5 + 8 + 1 = 113
+            return Err(VaultError::DeserializationError(
+                format!("Expected at least 113 bytes, got {}", vault_data.len())
+            ));
+        }
+        fn read_pubkey(data: &[u8], offset: usize) -> Result<String, VaultError> {
+            if data.len() < offset + 32 {
+                return Err(VaultError::DeserializationError("Not enough data for pubkey".to_string()));
+            }
+            let pubkey_bytes: [u8; 32] = data[offset..offset+32]
+                .try_into()
+                .map_err(|_| VaultError::DeserializationError("Invalid pubkey bytes".to_string()))?;
+            Ok(Pubkey::new_from_array(pubkey_bytes).to_string())
+        }
+        
+        fn read_u64(data: &[u8], offset: usize) -> Result<u64, VaultError> {
+            if data.len() < offset + 8 {
+                return Err(VaultError::DeserializationError("Not enough data for u64".to_string()));
+            }
+            let bytes: [u8; 8] = data[offset..offset+8]
+                .try_into()
+                .map_err(|_| VaultError::DeserializationError("Invalid u64 bytes".to_string()))?;
+            Ok(u64::from_le_bytes(bytes))
+        }
+        
+        fn read_i64(data: &[u8], offset: usize) -> Result<i64, VaultError> {
+            if data.len() < offset + 8 {
+                return Err(VaultError::DeserializationError("Not enough data for i64".to_string()));
+            }
+            let bytes: [u8; 8] = data[offset..offset+8]
+                .try_into()
+                .map_err(|_| VaultError::DeserializationError("Invalid i64 bytes".to_string()))?;
+            Ok(i64::from_le_bytes(bytes))
+        }
+        
+        let mut offset = 0;
+        
+        let owner_pubkey = read_pubkey(vault_data, offset)?;
+        offset += 32;
+        
+        let token_account = read_pubkey(vault_data, offset)?;
+        offset += 32;
+        
+        let total_balance = read_u64(vault_data, offset)? as i64;
+        offset += 8;
+        
+        let locked_balance = read_u64(vault_data, offset)? as i64;
+        offset += 8;
+        
+        let available_balance = read_u64(vault_data, offset)? as i64;
+        offset += 8;
+        
+        let total_deposited = read_u64(vault_data, offset)? as i64;
+        offset += 8;
+        
+        let total_withdrawn = read_u64(vault_data, offset)? as i64;
+        offset += 8;
+        
+        let created_at_unix = read_i64(vault_data, offset)?;
+        
+        let created_at = chrono::DateTime::from_timestamp(created_at_unix, 0)
+            .ok_or(VaultError::DeserializationError("Invalid timestamp".to_string()))?;
+        
+        if total_balance != (available_balance + locked_balance) {
+            tracing::warn!(
+                "Balance invariant violation in vault {}: total={}, available={}, locked={}",
+                vault_pubkey, total_balance, available_balance, locked_balance
+            );
+        }
+        
+        Ok(Vault {
+            vault_pubkey: vault_pubkey.to_string(),
+            owner_pubkey,
+            token_account,
+            total_balance,
+            locked_balance,
+            available_balance,
+            total_deposited,
+            total_withdrawn,
+            created_at,
+            updated_at: Utc::now(), // Use current time for updated_at
+        })
     }
 }
 
@@ -327,4 +416,6 @@ pub enum VaultError {
     InsufficientLockedBalance,
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
 }

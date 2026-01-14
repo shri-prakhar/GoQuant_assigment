@@ -3,6 +3,7 @@ pub mod balance_tracker;
 pub mod transaction_builder;
 pub mod vault_manager;
 pub mod vault_moniter;
+pub mod cpi_manager;
 
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use solana_sdk::pubkey::Pubkey;
 pub use transaction_builder::*;
 pub use vault_manager::*;
 pub use vault_moniter::*;
+pub use cpi_manager::*;
 
 use crate::{cache::Cache, config::Config, database::Database};
 
