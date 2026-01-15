@@ -195,6 +195,47 @@ impl Database {
         Ok(())
     }
 
+    pub async fn get_transactions(
+        &self,
+        vault_pubkey: Option<&str>,
+        tx_type: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TransactionRecord>, sqlx::Error> {
+        let mut query = "SELECT id, vault_pubkey, tx_signature, tx_type, amount, status, created_at FROM transactions WHERE 1=1".to_string();
+        let mut param_count = 0;
+
+        if vault_pubkey.is_some() {
+            param_count += 1;
+            query.push_str(&format!(" AND vault_pubkey = ${}", param_count));
+        }
+
+        if tx_type.is_some() {
+            param_count += 1;
+            query.push_str(&format!(" AND tx_type = ${}", param_count));
+        }
+
+        param_count += 1;
+        query.push_str(&format!(" ORDER BY created_at DESC LIMIT ${}", param_count));
+        param_count += 1;
+        query.push_str(&format!(" OFFSET ${}", param_count));
+
+        let mut q = sqlx::query_as::<_, TransactionRecord>(&query);
+
+        if let Some(vault) = vault_pubkey {
+            q = q.bind(vault);
+        }
+
+        if let Some(tx_type_val) = tx_type {
+            q = q.bind(tx_type_val);
+        }
+
+        q = q.bind(limit);
+        q = q.bind(offset);
+
+        q.fetch_all(&self.pool).await
+    }
+
     pub async fn get_vault_transactions(
         &self,
         vault_pubkey: &str,
@@ -214,6 +255,18 @@ impl Database {
         .await?;
 
         Ok(transactions)
+    }
+    pub async fn get_transaction_by_signature(
+        &self,
+        tx_signature: &str,
+    ) -> Result<Option<TransactionRecord>, sqlx::Error> {
+        sqlx::query_as!(
+            TransactionRecord,
+            "SELECT * FROM transactions WHERE tx_signature = $1",
+            tx_signature
+        )
+        .fetch_optional(&self.pool)
+        .await
     }
 
     pub async fn create_balance_snapshot(

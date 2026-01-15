@@ -4,6 +4,11 @@ use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 
 use crate::services::AppState;
+use crate::websocket::{
+    broadcast_balance_update, broadcast_deposit, broadcast_lock, 
+    broadcast_unlock, broadcast_withdrawal
+};
+
 pub struct VaultManager;
 
 impl VaultManager {
@@ -16,7 +21,7 @@ impl VaultManager {
             return Ok(Some(vault));
         }
 
-        tracing::debug!("Cache MISS for vaults {}", vault_pubkey);
+        tracing::debug!("Cache MISS for vault {}", vault_pubkey);
 
         let vault = state
             .database
@@ -61,13 +66,22 @@ impl VaultManager {
             .get_account(&pubkey)
             .map_err(|e| VaultError::SolanaRpcError(e.to_string()))?;
 
-        let vault_data = Self::parse_vault_account(&account.data , vault_pubkey)?;
+        let vault_data = Self::parse_vault_account(&account.data, vault_pubkey)?;
         state
             .database
             .upsert_vault(&vault_data)
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
         state.cache.set_vault(vault_data.clone()).await;
+        
+        
+        broadcast_balance_update(
+            vault_pubkey,
+            vault_data.total_balance,
+            vault_data.available_balance,
+            vault_data.locked_balance,
+        ).await;
+        
         tracing::info!("Synced vault {} from chain", vault_pubkey);
         Ok(vault_data)
     }
@@ -135,6 +149,7 @@ impl VaultManager {
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
 
         state.cache.set_vault(vault.clone()).await;
+        
         state
             .database
             .record_transaction(
@@ -148,6 +163,22 @@ impl VaultManager {
             )
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
+        
+        broadcast_deposit(
+            vault_pubkey,
+            amount,
+            tx_signature,
+            vault.total_balance,
+        ).await;
+        
+        
+        broadcast_balance_update(
+            vault_pubkey,
+            vault.total_balance,
+            vault.available_balance,
+            vault.locked_balance,
+        ).await;
+        
         tracing::info!("Processed deposit of {} to vault {}", amount, vault_pubkey);
 
         Ok(vault)
@@ -199,6 +230,21 @@ impl VaultManager {
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
 
+        broadcast_withdrawal(
+            vault_pubkey,
+            amount,
+            tx_signature,
+            vault.total_balance,
+        ).await;
+        
+        // Also broadcast balance update
+        broadcast_balance_update(
+            vault_pubkey,
+            vault.total_balance,
+            vault.available_balance,
+            vault.locked_balance,
+        ).await;
+
         tracing::info!(
             "Processed withdrawal of {} from vault {}",
             amount,
@@ -217,6 +263,7 @@ impl VaultManager {
         let mut vault = Self::get_vault(state, vault_pubkey)
             .await?
             .ok_or(VaultError::VaultNotFound)?;
+            
         if vault.available_balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
@@ -235,9 +282,9 @@ impl VaultManager {
             )
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
+            
         state.cache.set_vault(vault.clone()).await;
 
-        // Record transaction
         state
             .database
             .record_transaction(
@@ -251,6 +298,14 @@ impl VaultManager {
             )
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
+
+
+        broadcast_lock(
+            vault_pubkey,
+            amount,
+            vault.locked_balance,
+            vault.available_balance,
+        ).await;
 
         tracing::info!("Locked {} collateral in vault {}", amount, vault_pubkey);
 
@@ -302,89 +357,111 @@ impl VaultManager {
             .await
             .map_err(|e| VaultError::DatabaseError(e.to_string()))?;
 
+
+        broadcast_unlock(
+            vault_pubkey,
+            amount,
+            vault.locked_balance,
+            vault.available_balance,
+        ).await;
+
         tracing::info!("Unlocked {} collateral in vault {}", amount, vault_pubkey);
 
         Ok(vault)
     }
+    
     fn parse_vault_account(data: &[u8], vault_pubkey: &str) -> Result<Vault, VaultError> {
         if data.len() < 8 {
             return Err(VaultError::DeserializationError(
-                "Account data too short".to_string()
+                "Account data too short".to_string(),
             ));
         }
-        
+
         let vault_data = &data[8..];
-        
-        if vault_data.len() < 113 { // 32 + 32 + 8*5 + 8 + 1 = 113
-            return Err(VaultError::DeserializationError(
-                format!("Expected at least 113 bytes, got {}", vault_data.len())
-            ));
+
+        if vault_data.len() < 113 {
+            // 32 + 32 + 8*5 + 8 + 1 = 113
+            return Err(VaultError::DeserializationError(format!(
+                "Vault data too short: expected 113 bytes, got {}",
+                vault_data.len()
+            )));
         }
+
         fn read_pubkey(data: &[u8], offset: usize) -> Result<String, VaultError> {
-            if data.len() < offset + 32 {
-                return Err(VaultError::DeserializationError("Not enough data for pubkey".to_string()));
+            if offset + 32 > data.len() {
+                return Err(VaultError::DeserializationError(
+                    "Buffer overflow reading pubkey".to_string(),
+                ));
             }
-            let pubkey_bytes: [u8; 32] = data[offset..offset+32]
-                .try_into()
-                .map_err(|_| VaultError::DeserializationError("Invalid pubkey bytes".to_string()))?;
-            Ok(Pubkey::new_from_array(pubkey_bytes).to_string())
+            let bytes: [u8; 32] = data[offset..offset + 32].try_into().map_err(|_| {
+                VaultError::DeserializationError("Invalid pubkey bytes".to_string())
+            })?;
+            Ok(Pubkey::from(bytes).to_string())
         }
-        
+
         fn read_u64(data: &[u8], offset: usize) -> Result<u64, VaultError> {
-            if data.len() < offset + 8 {
-                return Err(VaultError::DeserializationError("Not enough data for u64".to_string()));
+            if offset + 8 > data.len() {
+                return Err(VaultError::DeserializationError(
+                    "Buffer overflow reading u64".to_string(),
+                ));
             }
-            let bytes: [u8; 8] = data[offset..offset+8]
-                .try_into()
-                .map_err(|_| VaultError::DeserializationError("Invalid u64 bytes".to_string()))?;
+            let bytes: [u8; 8] = data[offset..offset + 8].try_into().map_err(|_| {
+                VaultError::DeserializationError("Invalid u64 bytes".to_string())
+            })?;
             Ok(u64::from_le_bytes(bytes))
         }
-        
+
         fn read_i64(data: &[u8], offset: usize) -> Result<i64, VaultError> {
-            if data.len() < offset + 8 {
-                return Err(VaultError::DeserializationError("Not enough data for i64".to_string()));
+            if offset + 8 > data.len() {
+                return Err(VaultError::DeserializationError(
+                    "Buffer overflow reading i64".to_string(),
+                ));
             }
-            let bytes: [u8; 8] = data[offset..offset+8]
-                .try_into()
-                .map_err(|_| VaultError::DeserializationError("Invalid i64 bytes".to_string()))?;
+            let bytes: [u8; 8] = data[offset..offset + 8].try_into().map_err(|_| {
+                VaultError::DeserializationError("Invalid i64 bytes".to_string())
+            })?;
             Ok(i64::from_le_bytes(bytes))
         }
-        
+
         let mut offset = 0;
-        
+
         let owner_pubkey = read_pubkey(vault_data, offset)?;
         offset += 32;
-        
+
         let token_account = read_pubkey(vault_data, offset)?;
         offset += 32;
-        
+
         let total_balance = read_u64(vault_data, offset)? as i64;
         offset += 8;
-        
+
         let locked_balance = read_u64(vault_data, offset)? as i64;
         offset += 8;
-        
+
         let available_balance = read_u64(vault_data, offset)? as i64;
         offset += 8;
-        
+
         let total_deposited = read_u64(vault_data, offset)? as i64;
         offset += 8;
-        
+
         let total_withdrawn = read_u64(vault_data, offset)? as i64;
         offset += 8;
-        
+
         let created_at_unix = read_i64(vault_data, offset)?;
-        
-        let created_at = chrono::DateTime::from_timestamp(created_at_unix, 0)
-            .ok_or(VaultError::DeserializationError("Invalid timestamp".to_string()))?;
-        
+
+        let created_at = chrono::DateTime::from_timestamp(created_at_unix, 0).ok_or(
+            VaultError::DeserializationError("Invalid timestamp".to_string()),
+        )?;
+
         if total_balance != (available_balance + locked_balance) {
             tracing::warn!(
                 "Balance invariant violation in vault {}: total={}, available={}, locked={}",
-                vault_pubkey, total_balance, available_balance, locked_balance
+                vault_pubkey,
+                total_balance,
+                available_balance,
+                locked_balance
             );
         }
-        
+
         Ok(Vault {
             vault_pubkey: vault_pubkey.to_string(),
             owner_pubkey,
@@ -395,16 +472,16 @@ impl VaultManager {
             total_deposited,
             total_withdrawn,
             created_at,
-            updated_at: Utc::now(), // Use current time for updated_at
+            updated_at: Utc::now(),
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
-    #[error("Database error : {0}")]
+    #[error("Database error: {0}")]
     DatabaseError(String),
-    #[error("Solana RPC Error : {0}")]
+    #[error("Solana RPC Error: {0}")]
     SolanaRpcError(String),
     #[error("Invalid Pubkey Format")]
     InvalidPubkey,
