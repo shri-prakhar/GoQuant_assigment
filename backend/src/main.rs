@@ -84,6 +84,7 @@ async fn main() -> Result<(), std::io::Error>{
             .wrap(cors)
             .route("/health", web::get().to(api::health::health_check))
             .route("/metrics", web::get().to(monitering::metrics::metrics))
+            .route("/ws", web::get().to(websocket::ws_handler))
             .service(
                 web::scope("/api/v1")
                     .configure(api::vault::configure)
