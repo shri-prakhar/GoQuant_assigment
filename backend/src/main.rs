@@ -15,7 +15,7 @@ mod api_tests;
 
 use config::Config;
 
-use crate::{cache::Cache, database::Database, services::vault_moniter};
+use crate::{cache::Cache, database::Database, services::{event_listner, vault_moniter}};
 
 #[actix_web::main]
 async fn main() -> Result<(), std::io::Error>{
@@ -65,7 +65,11 @@ async fn main() -> Result<(), std::io::Error>{
     tokio::spawn(async move {
         services::balance_reconciler::run_reconciler(reconcile_state).await;
     });
-
+    let event_listener_state = app_state.clone();
+    tokio::spawn(async move {
+        tracing::info!("🎧 Spawning Event Listener background task...");
+        event_listner::run_event_listener(event_listener_state).await;
+    });
     tracing::info!("Background services started (monitor, reconciler)");
 
     let bind_address = format!("{}:{}", config.host, config.port);

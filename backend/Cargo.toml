@@ -75,7 +75,8 @@ base64 = "0.22.1"
 bincode = "2.0.1"
 borsh = "*"
 reqwest = { version = "*", features = ["json"] }
-
+sha2 = "*"
+lazy_static="*"
 [dev-dependencies]
 # Testing utilities
 

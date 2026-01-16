@@ -18,20 +18,11 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 use actix_web::web::Data;
-use anchor_lang::prelude::*;
-use solana_client::{
-    rpc_client::RpcClient,
-    rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter},
-};
-use solana_sdk::{
-    pubkey::Pubkey,
-    signature::Signature,
-};
-use solana_client::rpc_config::RpcTransactionConfig;
-use tokio::sync::mpsc;
+use borsh::BorshDeserialize;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
 use tokio::time;
 
 use crate::services::AppState;
@@ -41,65 +32,121 @@ use crate::websocket::{
 };
 
 // ============================================================================
-// Event Structures (matching Anchor program events)
+// Event Structures (using raw bytes to avoid borsh version conflicts)
 // ============================================================================
 
+/// Helper to convert [u8; 32] to Pubkey string
+fn pubkey_to_string(bytes: &[u8; 32]) -> String {
+    Pubkey::from(*bytes).to_string()
+}
+
 /// Deposit event emitted by the on-chain program
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct DepositEvent {
-    pub user: Pubkey,
-    pub vault: Pubkey,
+    pub user: [u8; 32],
+    pub vault: [u8; 32],
     pub amount: u64,
     pub new_balance: u64,
     pub timestamp: i64,
+}
+
+impl DepositEvent {
+    pub fn user_pubkey(&self) -> String {
+        pubkey_to_string(&self.user)
+    }
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
+    }
 }
 
 /// Withdrawal event emitted by the on-chain program
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct WithdrawEvent {
-    pub user: Pubkey,
-    pub vault: Pubkey,
+    pub user: [u8; 32],
+    pub vault: [u8; 32],
     pub amount: u64,
     pub new_balance: u64,
     pub timestamp: i64,
 }
 
+impl WithdrawEvent {
+    pub fn user_pubkey(&self) -> String {
+        pubkey_to_string(&self.user)
+    }
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
+    }
+}
+
 /// Lock collateral event
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct LockEvent {
-    pub vault: Pubkey,
+    pub vault: [u8; 32],
     pub amount: u64,
     pub new_locked: u64,
     pub new_available: u64,
     pub timestamp: i64,
+}
+
+impl LockEvent {
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
+    }
 }
 
 /// Unlock collateral event
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct UnlockEvent {
-    pub vault: Pubkey,
+    pub vault: [u8; 32],
     pub amount: u64,
     pub new_locked: u64,
     pub new_available: u64,
     pub timestamp: i64,
 }
 
+impl UnlockEvent {
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
+    }
+}
+
 /// Transfer between vaults event
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct TransferEvent {
-    pub from_vault: Pubkey,
-    pub to_vault: Pubkey,
+    pub from_vault: [u8; 32],
+    pub to_vault: [u8; 32],
     pub amount: u64,
     pub timestamp: i64,
 }
 
+impl TransferEvent {
+    pub fn from_vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.from_vault)
+    }
+    pub fn to_vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.to_vault)
+    }
+}
+
 /// Vault initialized event
-#[derive(Debug, Clone, AnchorDeserialize)]
+#[derive(Debug, Clone, BorshDeserialize)]
 pub struct VaultInitializedEvent {
-    pub vault: Pubkey,
-    pub owner: Pubkey,
-    pub token_account: Pubkey,
+    pub vault: [u8; 32],
+    pub owner: [u8; 32],
+    pub token_account: [u8; 32],
     pub timestamp: i64,
+}
+
+impl VaultInitializedEvent {
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
+    }
+    pub fn owner_pubkey(&self) -> String {
+        pubkey_to_string(&self.owner)
+    }
+    pub fn token_account_pubkey(&self) -> String {
+        pubkey_to_string(&self.token_account)
+    }
 }
 
 // ============================================================================
@@ -153,7 +200,6 @@ impl Default for EventListenerConfig {
 pub struct EventListener {
     state: Data<AppState>,
     config: EventListenerConfig,
-    last_processed_signature: Option<Signature>,
     processed_signatures: HashMap<String, i64>, // signature -> timestamp
 }
 
@@ -162,7 +208,6 @@ impl EventListener {
         Self {
             state,
             config,
-            last_processed_signature: None,
             processed_signatures: HashMap::new(),
         }
     }
@@ -308,17 +353,11 @@ impl EventListener {
             return None;
         }
 
-        let discriminator = &data[0..8];
+        // Skip the 8-byte discriminator
         let event_data = &data[8..];
 
-        // Event discriminators (first 8 bytes of sha256("event:<EventName>"))
-        // These should match your Anchor program's event discriminators
-        
         // Try parsing each event type
-        // Note: In production, calculate these discriminators properly
-        
-        // For demonstration, we'll use pattern matching on common event structures
-        // You would replace these with actual discriminator values from your IDL
+        // Note: In production, you should check discriminators first
         
         if let Ok(event) = DepositEvent::try_from_slice(event_data) {
             return Some(VaultEvent::Deposit(event));
@@ -390,7 +429,7 @@ impl EventListener {
         event: DepositEvent,
         tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let vault_pubkey = event.vault.to_string();
+        let vault_pubkey = event.vault_pubkey();
         let amount = event.amount as i64;
         let new_balance = event.new_balance as i64;
 
@@ -464,7 +503,7 @@ impl EventListener {
         event: WithdrawEvent,
         tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let vault_pubkey = event.vault.to_string();
+        let vault_pubkey = event.vault_pubkey();
         let amount = event.amount as i64;
         let new_balance = event.new_balance as i64;
 
@@ -533,7 +572,7 @@ impl EventListener {
         event: LockEvent,
         tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let vault_pubkey = event.vault.to_string();
+        let vault_pubkey = event.vault_pubkey();
         let amount = event.amount as i64;
         let new_locked = event.new_locked as i64;
         let new_available = event.new_available as i64;
@@ -592,7 +631,7 @@ impl EventListener {
         event: UnlockEvent,
         tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let vault_pubkey = event.vault.to_string();
+        let vault_pubkey = event.vault_pubkey();
         let amount = event.amount as i64;
         let new_locked = event.new_locked as i64;
         let new_available = event.new_available as i64;
@@ -651,8 +690,8 @@ impl EventListener {
         event: TransferEvent,
         tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let from_vault = event.from_vault.to_string();
-        let to_vault = event.to_vault.to_string();
+        let from_vault = event.from_vault_pubkey();
+        let to_vault = event.to_vault_pubkey();
         let amount = event.amount as i64;
 
         tracing::info!(
@@ -679,7 +718,6 @@ impl EventListener {
         self.state.cache.invalidate_vault(&to_vault).await;
 
         // Sync both vaults from chain to get accurate balances
-        // This ensures we have the latest on-chain state
         self.sync_vault_from_chain(&from_vault).await?;
         self.sync_vault_from_chain(&to_vault).await?;
 
@@ -693,9 +731,9 @@ impl EventListener {
         event: VaultInitializedEvent,
         _tx_signature: &str,
     ) -> Result<(), EventListenerError> {
-        let vault_pubkey = event.vault.to_string();
-        let owner_pubkey = event.owner.to_string();
-        let token_account = event.token_account.to_string();
+        let vault_pubkey = event.vault_pubkey();
+        let owner_pubkey = event.owner_pubkey();
+        let token_account = event.token_account_pubkey();
 
         tracing::info!(
             "🆕 Vault initialized: vault={}, owner={}, token_account={}",
@@ -737,7 +775,7 @@ impl EventListener {
             .map_err(|e| EventListenerError::ParseError(e.to_string()))?;
 
         match self.state.solana_client.get_account(&pubkey) {
-            Ok(account) => {
+            Ok(_account) => {
                 // Parse vault account data
                 // In production, you'd use your Anchor program's account parser
                 if let Some(vault) = self.state.database.get_vault(vault_pubkey).await
@@ -818,4 +856,3 @@ pub async fn run_event_listener_with_config(
     let mut listener = EventListener::new(state, config);
     listener.start().await;
 }
-
