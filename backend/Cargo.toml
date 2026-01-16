@@ -43,7 +43,7 @@ solana-client = "*"
 solana-program = "*"
 anchor-client = "0.32"
 anchor-lang = "0.32"
-
+solana-transaction-status ="*"
 # SPL Token
 spl-token = "*"
 spl-associated-token-account = "*"
@@ -73,9 +73,10 @@ parking_lot = "0.12"
 dashmap = "*"
 base64 = "0.22.1"
 bincode = "2.0.1"
-
+borsh = "*"
+reqwest = { version = "*", features = ["json"] }
 
 [dev-dependencies]
 # Testing utilities
-reqwest = { version = "*", features = ["json"] }
+
 mockall = "*"

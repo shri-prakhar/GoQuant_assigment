@@ -11,6 +11,7 @@ mod database;
 mod monitering;
 mod services;
 mod websocket;
+mod api_tests;
 
 use config::Config;
 
