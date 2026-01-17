@@ -107,7 +107,17 @@ async fn main() -> Result<(), std::io::Error>{
         .await
         .expect("Failed to run migrations");
     tracing::info!(" Database migrations completed");
-
+    match database.cleanup_invalid_vaults().await {
+    Ok(count) if count > 0 => {
+        tracing::info!("🧹 Cleaned up {} invalid test vaults", count);
+    }
+    Ok(_) => {
+        tracing::debug!("No invalid vaults to clean up");
+    }
+    Err(e) => {
+        tracing::warn!("Failed to cleanup invalid vaults: {}", e);
+    }
+}
     // Initialize cache with specified capacity
     let cache = Cache::new(20_000);
     tracing::info!(" Cache initialized with 20,000 entry capacity");

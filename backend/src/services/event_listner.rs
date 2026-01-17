@@ -110,7 +110,7 @@ impl UnlockEvent {
     }
 }
 
-/// Transfer between vaults event
+/// Transfer event between vaults
 #[derive(Debug, Clone, BorshDeserialize)]
 pub struct TransferEvent {
     pub from_vault: [u8; 32],
@@ -131,28 +131,25 @@ impl TransferEvent {
 /// Vault initialized event
 #[derive(Debug, Clone, BorshDeserialize)]
 pub struct VaultInitializedEvent {
-    pub vault: [u8; 32],
     pub owner: [u8; 32],
+    pub vault: [u8; 32],
     pub token_account: [u8; 32],
     pub timestamp: i64,
 }
 
 impl VaultInitializedEvent {
-    pub fn vault_pubkey(&self) -> String {
-        pubkey_to_string(&self.vault)
-    }
     pub fn owner_pubkey(&self) -> String {
         pubkey_to_string(&self.owner)
+    }
+    pub fn vault_pubkey(&self) -> String {
+        pubkey_to_string(&self.vault)
     }
     pub fn token_account_pubkey(&self) -> String {
         pubkey_to_string(&self.token_account)
     }
 }
 
-// ============================================================================
-// Parsed Event Enum
-// ============================================================================
-
+/// All possible vault events
 #[derive(Debug, Clone)]
 pub enum VaultEvent {
     Deposit(DepositEvent),
@@ -184,9 +181,9 @@ pub struct EventListenerConfig {
 impl Default for EventListenerConfig {
     fn default() -> Self {
         Self {
-            poll_interval_ms: 1000,  // Poll every second
+            poll_interval_ms: 2000,  // Poll every 2 seconds (reduced frequency)
             slots_to_check: 100,     // Check last 100 slots
-            use_websocket: true,
+            use_websocket: false,    // Use polling by default (more reliable)
             max_retries: 3,
             retry_delay_ms: 500,
         }
@@ -214,52 +211,104 @@ impl EventListener {
 
     /// Start the event listener service
     pub async fn start(&mut self) {
+        // Log immediately on start - BEFORE any async operations
         tracing::info!(
-            "🎧 Event Listener started (poll_interval: {}ms, use_websocket: {})",
+            "🎧 Event Listener starting (poll_interval: {}ms, program_id: {})",
             self.config.poll_interval_ms,
-            self.config.use_websocket
+            self.state.program_id
         );
 
-        if self.config.use_websocket {
-            // Try WebSocket subscription first, fall back to polling
-            self.run_with_websocket_fallback().await;
-        } else {
-            self.run_polling_loop().await;
+        // Test RPC connection first
+        match self.test_rpc_connection().await {
+            Ok(_) => {
+                tracing::info!("✅ Event Listener RPC connection verified");
+            }
+            Err(e) => {
+                tracing::error!("❌ Event Listener RPC connection failed: {}. Will retry...", e);
+                // Don't exit - continue anyway, polling loop will handle retries
+            }
         }
+
+        tracing::info!("📡 Event Listener entering polling mode");
+        self.run_polling_loop().await;
     }
 
-    /// Run with WebSocket subscription, falling back to polling if unavailable
-    async fn run_with_websocket_fallback(&mut self) {
-        // For production, you'd use pubsub_client for WebSocket
-        // For now, use polling which works with standard RPC
-        tracing::info!("📡 Using polling mode for event listening");
-        self.run_polling_loop().await;
+    /// Test RPC connection before starting the main loop
+    async fn test_rpc_connection(&self) -> Result<(), String> {
+        // Try to get the current slot as a simple health check
+        self.state.solana_client
+            .get_slot()
+            .await
+            .map(|slot| {
+                tracing::debug!("RPC health check: current slot = {}", slot);
+            })
+            .map_err(|e| e.to_string())
     }
 
     /// Main polling loop to fetch and process program logs
     async fn run_polling_loop(&mut self) {
         let mut interval = time::interval(Duration::from_millis(self.config.poll_interval_ms));
+        let mut consecutive_errors = 0u32;
+        let max_consecutive_errors = 10;
 
         loop {
             interval.tick().await;
 
-            if let Err(e) = self.poll_and_process_events().await {
-                tracing::error!("Event polling error: {}", e);
+            match self.poll_and_process_events().await {
+                Ok(events_processed) => {
+                    consecutive_errors = 0; // Reset error counter on success
+                    if events_processed > 0 {
+                        tracing::info!("📬 Processed {} events this cycle", events_processed);
+                    } else {
+                        tracing::trace!("No new events this cycle");
+                    }
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    tracing::error!(
+                        "Event polling error (attempt {}/{}): {}", 
+                        consecutive_errors, 
+                        max_consecutive_errors,
+                        e
+                    );
+
+                    if consecutive_errors >= max_consecutive_errors {
+                        tracing::error!(
+                            "❌ Too many consecutive errors ({}), backing off for 30 seconds",
+                            consecutive_errors
+                        );
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        consecutive_errors = 0; // Reset after backoff
+                    }
+                }
             }
         }
     }
 
     /// Poll for new program logs and process events
-    async fn poll_and_process_events(&mut self) -> Result<(), EventListenerError> {
+    /// Returns the number of events processed
+    async fn poll_and_process_events(&mut self) -> Result<usize, EventListenerError> {
         let program_id = self.state.program_id;
 
         // Get recent signatures for the program
-        let signatures = self.state.solana_client
+        let signatures = match self.state.solana_client
             .get_signatures_for_address(&program_id)
-            .await
-            .map_err(|e| EventListenerError::RpcError(e.to_string()))?;
+            .await 
+        {
+            Ok(sigs) => sigs,
+            Err(e) => {
+                // Check if it's just "no signatures found" (not an error)
+                let err_str = e.to_string();
+                if err_str.contains("AccountNotFound") || err_str.contains("not found") {
+                    tracing::trace!("No signatures found for program {} (this is normal for new programs)", program_id);
+                    return Ok(0);
+                }
+                return Err(EventListenerError::RpcError(err_str));
+            }
+        };
 
         let mut new_events = Vec::new();
+        let mut processed_count = 0;
 
         for sig_info in signatures.iter().take(50) {  // Process last 50 transactions
             let signature_str = sig_info.signature.clone();
@@ -271,20 +320,28 @@ impl EventListener {
 
             // Skip failed transactions
             if sig_info.err.is_some() {
-                self.processed_signatures.insert(signature_str, chrono::Utc::now().timestamp());
+                self.processed_signatures.insert(signature_str.clone(), chrono::Utc::now().timestamp());
                 continue;
             }
 
             // Parse the signature
-            let signature = Signature::from_str(&signature_str)
-                .map_err(|e| EventListenerError::ParseError(e.to_string()))?;
+            let signature = match Signature::from_str(&signature_str) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::warn!("Failed to parse signature {}: {}", signature_str, e);
+                    self.processed_signatures.insert(signature_str, chrono::Utc::now().timestamp());
+                    continue;
+                }
+            };
 
             // Fetch transaction details
             match self.fetch_and_parse_transaction(&signature).await {
                 Ok(Some(events)) => {
                     new_events.extend(events);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    // No events in this transaction - that's fine
+                }
                 Err(e) => {
                     tracing::warn!("Failed to parse transaction {}: {}", signature_str, e);
                 }
@@ -296,8 +353,13 @@ impl EventListener {
 
         // Process all new events
         for (event, tx_signature) in new_events {
-            if let Err(e) = self.process_event(event, &tx_signature).await {
-                tracing::error!("Failed to process event: {}", e);
+            match self.process_event(event.clone(), &tx_signature).await {
+                Ok(_) => {
+                    processed_count += 1;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to process event {:?}: {}", event, e);
+                }
             }
         }
 
@@ -305,7 +367,7 @@ impl EventListener {
         let cutoff = chrono::Utc::now().timestamp() - 3600;
         self.processed_signatures.retain(|_, ts| *ts > cutoff);
 
-        Ok(())
+        Ok(processed_count)
     }
 
     /// Fetch and parse a transaction for events
@@ -388,11 +450,6 @@ impl EventListener {
     }
 
     /// Process a parsed event - update database, cache, and broadcast
-    /// 
-    /// This implements points 10-12 of the architecture:
-    /// 10. Update database with on-chain values
-    /// 11. Invalidate cache for affected vaults  
-    /// 12. Broadcast update via WebSocket
     async fn process_event(
         &self,
         event: VaultEvent,
@@ -439,7 +496,7 @@ impl EventListener {
             vault_pubkey, amount, new_balance
         );
 
-        // Step 10: Update database with on-chain values
+        // Update database with on-chain values
         self.state.database
             .update_vault_balances(
                 &vault_pubkey,
@@ -465,10 +522,10 @@ impl EventListener {
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Step 11: Invalidate cache for affected vault
+        // Invalidate cache for affected vault
         self.state.cache.invalidate_vault(&vault_pubkey).await;
 
-        // Step 12: Broadcast update via WebSocket
+        // Broadcast update via WebSocket
         broadcast_deposit(
             &vault_pubkey,
             amount,
@@ -513,7 +570,7 @@ impl EventListener {
             vault_pubkey, amount, new_balance
         );
 
-        // Step 10: Update database
+        // Update database
         self.state.database
             .update_vault_balances(
                 &vault_pubkey,
@@ -539,10 +596,10 @@ impl EventListener {
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Step 11: Invalidate cache
+        // Invalidate cache
         self.state.cache.invalidate_vault(&vault_pubkey).await;
 
-        // Step 12: Broadcast via WebSocket
+        // Broadcast via WebSocket
         broadcast_withdrawal(&vault_pubkey, amount, tx_signature, new_balance).await;
 
         // Broadcast balance update
@@ -590,7 +647,7 @@ impl EventListener {
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?
             .ok_or_else(|| EventListenerError::VaultNotFound(vault_pubkey.clone()))?;
 
-        // Step 10: Update database
+        // Update database
         self.state.database
             .update_vault_balances(
                 &vault_pubkey,
@@ -616,10 +673,10 @@ impl EventListener {
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Step 11: Invalidate cache
+        // Invalidate cache
         self.state.cache.invalidate_vault(&vault_pubkey).await;
 
-        // Step 12: Broadcast via WebSocket
+        // Broadcast via WebSocket
         broadcast_lock(&vault_pubkey, amount, new_locked, new_available).await;
 
         tracing::info!("✅ Lock event processed successfully");
@@ -649,7 +706,7 @@ impl EventListener {
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?
             .ok_or_else(|| EventListenerError::VaultNotFound(vault_pubkey.clone()))?;
 
-        // Step 10: Update database
+        // Update database
         self.state.database
             .update_vault_balances(
                 &vault_pubkey,
@@ -675,10 +732,10 @@ impl EventListener {
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Step 11: Invalidate cache
+        // Invalidate cache
         self.state.cache.invalidate_vault(&vault_pubkey).await;
 
-        // Step 12: Broadcast via WebSocket
+        // Broadcast via WebSocket
         broadcast_unlock(&vault_pubkey, amount, new_locked, new_available).await;
 
         tracing::info!("✅ Unlock event processed successfully");
@@ -714,13 +771,17 @@ impl EventListener {
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Invalidate cache for both vaults
+        // Invalidate both caches
         self.state.cache.invalidate_vault(&from_vault).await;
         self.state.cache.invalidate_vault(&to_vault).await;
 
         // Sync both vaults from chain to get accurate balances
-        self.sync_vault_from_chain(&from_vault).await?;
-        self.sync_vault_from_chain(&to_vault).await?;
+        if let Err(e) = crate::services::VaultManager::sync_vault_from_chain(&self.state, &from_vault).await {
+            tracing::warn!("Failed to sync from vault {}: {}", from_vault, e);
+        }
+        if let Err(e) = crate::services::VaultManager::sync_vault_from_chain(&self.state, &to_vault).await {
+            tracing::warn!("Failed to sync to vault {}: {}", to_vault, e);
+        }
 
         tracing::info!("✅ Transfer event processed successfully");
         Ok(())
@@ -730,38 +791,45 @@ impl EventListener {
     async fn handle_vault_initialized_event(
         &self,
         event: VaultInitializedEvent,
-        _tx_signature: &str,
+        tx_signature: &str,
     ) -> Result<(), EventListenerError> {
         let vault_pubkey = event.vault_pubkey();
         let owner_pubkey = event.owner_pubkey();
         let token_account = event.token_account_pubkey();
 
         tracing::info!(
-            "🆕 Vault initialized: vault={}, owner={}, token_account={}",
+            "🆕 Vault initialized event: vault={}, owner={}, token_account={}",
             vault_pubkey, owner_pubkey, token_account
         );
 
-        // Create vault in database
-        let vault = shared::Vault {
-            vault_pubkey: vault_pubkey.clone(),
-            owner_pubkey: owner_pubkey.clone(),
-            token_account,
-            total_balance: 0,
-            locked_balance: 0,
-            available_balance: 0,
-            total_deposited: 0,
-            total_withdrawn: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-
-        self.state.database
-            .upsert_vault(&vault)
+        // Check if vault already exists in database
+        let existing = self.state.database
+            .get_vault(&vault_pubkey)
             .await
             .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
-        // Set in cache
-        self.state.cache.set_vault(vault).await;
+        if existing.is_none() {
+            // Sync new vault from chain to populate database
+            if let Err(e) = crate::services::VaultManager::sync_vault_from_chain(&self.state, &vault_pubkey).await {
+                tracing::warn!("Failed to sync newly initialized vault {}: {}", vault_pubkey, e);
+            } else {
+                tracing::info!("Synced newly initialized vault {} from chain", vault_pubkey);
+            }
+        }
+
+        // Record transaction
+        self.state.database
+            .record_transaction(
+                &vault_pubkey,
+                tx_signature,
+                "initialize",
+                0,
+                None,
+                None,
+                "confirmed",
+            )
+            .await
+            .map_err(|e| EventListenerError::DatabaseError(e.to_string()))?;
 
         // Update TVL
         self.update_tvl().await?;
@@ -770,32 +838,11 @@ impl EventListener {
         Ok(())
     }
 
-    /// Sync a vault from on-chain state
-    async fn sync_vault_from_chain(&self, vault_pubkey: &str) -> Result<(), EventListenerError> {
-        let pubkey = Pubkey::from_str(vault_pubkey)
-            .map_err(|e| EventListenerError::ParseError(e.to_string()))?;
-
-        match self.state.solana_client.get_account(&pubkey).await {
-            Ok(_account) => {
-                // Parse vault account data
-                // In production, you'd use your Anchor program's account parser
-                if let Some(vault) = self.state.database.get_vault(vault_pubkey).await
-                    .map_err(|e| EventListenerError::DatabaseError(e.to_string()))? 
-                {
-                    // Broadcast updated balance
-                    broadcast_balance_update(
-                        vault_pubkey,
-                        vault.total_balance,
-                        vault.available_balance,
-                        vault.locked_balance,
-                    ).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to sync vault {}: {}", vault_pubkey, e);
-            }
+    /// Sync a vault from on-chain data
+    async fn sync_vault(&self, vault_pubkey: &str) -> Result<(), EventListenerError> {
+        if let Err(e) = crate::services::VaultManager::sync_vault_from_chain(&self.state, vault_pubkey).await {
+            tracing::warn!("Failed to sync vault {}: {}", vault_pubkey, e);
         }
-
         Ok(())
     }
 
@@ -844,9 +891,16 @@ pub enum EventListenerError {
 
 /// Start the event listener as a background task
 pub async fn run_event_listener(state: Data<AppState>) {
+    tracing::info!("🚀 Initializing Event Listener...");
+    
     let config = EventListenerConfig::default();
     let mut listener = EventListener::new(state, config);
+    
+    // This should never return under normal operation
     listener.start().await;
+    
+    // If we get here, something went wrong
+    tracing::error!("❌ Event Listener unexpectedly exited!");
 }
 
 /// Start event listener with custom configuration
@@ -854,6 +908,10 @@ pub async fn run_event_listener_with_config(
     state: Data<AppState>,
     config: EventListenerConfig,
 ) {
+    tracing::info!("🚀 Initializing Event Listener with custom config...");
+    
     let mut listener = EventListener::new(state, config);
     listener.start().await;
+    
+    tracing::error!("❌ Event Listener unexpectedly exited!");
 }

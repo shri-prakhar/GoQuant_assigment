@@ -100,45 +100,53 @@ impl Database {
         Ok(row.get("count"))
     }
 
-    pub async fn update_vault_balances(
-        &self,
-        vault_pubkey: &str,
-        total_balance: i64,
-        locked_balance: i64,
-        total_deposited: Option<i64>,
-        total_withdrawn: Option<i64>,
-    ) -> Result<(), sqlx::Error> {
-        let mut query = String::from("UPDATE vaults SET total_balance=$1 , locked_balance=$2");
-        let mut param_count = 3;
+pub async fn update_vault_balances(
+    &self,
+    vault_pubkey: &str,
+    total_balance: i64,
+    locked_balance: i64,
+    total_deposited: Option<i64>,
+    total_withdrawn: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    // NOTE: Do NOT update available_balance - it's a GENERATED column!
+    // PostgreSQL automatically computes: available_balance = total_balance - locked_balance
+    
+    let mut query = String::from("UPDATE vaults SET total_balance = $1, locked_balance = $2");
+    let mut param_count = 3;  // Next param will be $3
 
-        if total_deposited.is_some() {
-            query.push_str(&format!(", total_deposited = ${}", param_count));
-        }
-        if total_withdrawn.is_some() {
-            query.push_str(&format!(", total_withdrawn = ${}", param_count));
-            param_count += 1;
-        }
-
-        query.push_str(&format!(
-            ", updated_at = NOW() WHERE vault_pubkey = ${}",
-            param_count
-        ));
-
-        let mut q = sqlx::query(&query).bind(total_balance).bind(locked_balance);
-
-        if let Some(deposited) = total_deposited {
-            q = q.bind(deposited)
-        }
-        if let Some(withdrawn) = total_withdrawn {
-            q = q.bind(withdrawn);
-        }
-
-        q = q.bind(vault_pubkey);
-        q.execute(&self.pool).await?;
-
-        Ok(())
+    if total_deposited.is_some() {
+        query.push_str(&format!(", total_deposited = ${}", param_count));
+        param_count += 1;  // THIS WAS MISSING IN THE ORIGINAL!
+    }
+    
+    if total_withdrawn.is_some() {
+        query.push_str(&format!(", total_withdrawn = ${}", param_count));
+        param_count += 1;
     }
 
+    query.push_str(&format!(
+        ", updated_at = NOW() WHERE vault_pubkey = ${}",
+        param_count
+    ));
+
+    // Bind parameters in the same order as the query
+    let mut q = sqlx::query(&query)
+        .bind(total_balance)   // $1
+        .bind(locked_balance); // $2
+
+    if let Some(deposited) = total_deposited {
+        q = q.bind(deposited); // $3 (if present)
+    }
+    
+    if let Some(withdrawn) = total_withdrawn {
+        q = q.bind(withdrawn); // $3 or $4 (depending on deposited)
+    }
+
+    q = q.bind(vault_pubkey); // Last param
+    q.execute(&self.pool).await?;
+
+    Ok(())
+}
     pub async fn record_transaction(
         &self,
         vault_pubkey: &str,
@@ -510,18 +518,120 @@ impl Database {
     }
 
     pub async fn get_tvl_stats(&self) -> Result<TvlStats, sqlx::Error> {
-        let row = sqlx::query("SELECT * FROM tvl_stats")
-            .fetch_one(&self.pool)
-            .await?;
+    let row = sqlx::query(
+        r#"
+        SELECT 
+            COALESCE(COUNT(*)::BIGINT, 0) AS total_vaults,
+            COALESCE(SUM(total_balance)::BIGINT, 0) AS total_value_locked,
+            COALESCE(SUM(locked_balance)::BIGINT, 0) AS total_available,
+            COALESCE(SUM(available_balance)::BIGINT, 0) AS total_locked,
+            COALESCE(AVG(total_balance), 0)::FLOAT8 AS avg_vault_balance,
+            COALESCE(MAX(total_balance)::BIGINT, 0) AS max_vault_balance
+        FROM vaults
+        "#
+    )
+    .fetch_one(&self.pool)
+    .await?;
 
-        Ok(TvlStats {
-            total_vaults: row.get("total_vaults"),
-            total_value_locked: row.get("total_value_locked"),
-            total_locked: row.get("total_available"),
-            total_available: row.get("total_locked"),
-            avg_vault_balance: row.get("avg_vault_balance"),
-            max_vault_balance: row.get("max_vault_balance"),
-            timestamp: Utc::now(),
-        })
+    Ok(TvlStats {
+        total_vaults: row.get("total_vaults"),
+        total_value_locked: row.get("total_value_locked"),
+        total_locked: row.get("total_available"),
+        total_available: row.get("total_locked"),
+        avg_vault_balance: row.get("avg_vault_balance"),
+        max_vault_balance: row.get("max_vault_balance"),
+        timestamp: Utc::now(),
+    })
+}
+pub async fn cleanup_invalid_vaults(&self) -> Result<u64, sqlx::Error> {
+        // Start a transaction to ensure atomicity
+        let mut tx = self.pool.begin().await?;
+        
+        // First, delete transactions associated with invalid vaults
+        let tx_result = sqlx::query(
+            r#"
+            DELETE FROM transactions 
+            WHERE vault_pubkey IN (
+                SELECT vault_pubkey FROM vaults 
+                WHERE LENGTH(vault_pubkey) < 32 
+                   OR LENGTH(vault_pubkey) > 44
+                   OR vault_pubkey LIKE '%1111111111111111%'
+                   OR vault_pubkey LIKE 'Wf%'
+                   OR vault_pubkey LIKE 'WorkflowTest%'
+            )
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        
+        tracing::debug!("Deleted {} invalid transactions", tx_result.rows_affected());
+        
+        // Also delete from other tables that might reference vaults
+        let _ = sqlx::query(
+            r#"
+            DELETE FROM balance_snapshots 
+            WHERE vault_pubkey IN (
+                SELECT vault_pubkey FROM vaults 
+                WHERE LENGTH(vault_pubkey) < 32 
+                   OR LENGTH(vault_pubkey) > 44
+                   OR vault_pubkey LIKE '%1111111111111111%'
+                   OR vault_pubkey LIKE 'Wf%'
+                   OR vault_pubkey LIKE 'WorkflowTest%'
+            )
+            "#,
+        )
+        .execute(&mut *tx)
+        .await;
+        
+        let _ = sqlx::query(
+            r#"
+            DELETE FROM reconciliation_logs 
+            WHERE vault_pubkey IN (
+                SELECT vault_pubkey FROM vaults 
+                WHERE LENGTH(vault_pubkey) < 32 
+                   OR LENGTH(vault_pubkey) > 44
+                   OR vault_pubkey LIKE '%1111111111111111%'
+                   OR vault_pubkey LIKE 'Wf%'
+                   OR vault_pubkey LIKE 'WorkflowTest%'
+            )
+            "#,
+        )
+        .execute(&mut *tx)
+        .await;
+        
+        let _ = sqlx::query(
+            r#"
+            DELETE FROM alerts 
+            WHERE vault_pubkey IN (
+                SELECT vault_pubkey FROM vaults 
+                WHERE LENGTH(vault_pubkey) < 32 
+                   OR LENGTH(vault_pubkey) > 44
+                   OR vault_pubkey LIKE '%1111111111111111%'
+                   OR vault_pubkey LIKE 'Wf%'
+                   OR vault_pubkey LIKE 'WorkflowTest%'
+            )
+            "#,
+        )
+        .execute(&mut *tx)
+        .await;
+        
+        // Then delete the vaults themselves
+        let vault_result = sqlx::query(
+            r#"
+            DELETE FROM vaults 
+            WHERE LENGTH(vault_pubkey) < 32 
+               OR LENGTH(vault_pubkey) > 44
+               OR vault_pubkey LIKE '%1111111111111111%'
+               OR vault_pubkey LIKE 'Wf%'
+               OR vault_pubkey LIKE 'WorkflowTest%'
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        
+        // Commit the transaction
+        tx.commit().await?;
+        
+        Ok(vault_result.rows_affected())
     }
 }

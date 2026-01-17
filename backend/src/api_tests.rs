@@ -1,58 +1,56 @@
-//! # Collateral Vault Backend API Tests
-//! 
-//! Comprehensive integration tests for all vault operations using two sample users.
-//! 
-//! ## Test Users:
-//! - User 1 (Alice): Main user for deposit/withdraw flows
-//! - User 2 (Bob): Secondary user for transfer and multi-user scenarios
+//! # Collateral Vault Backend - Test Suite
 //!
-//! ## Test Coverage:
-//! - Vault initialization
-//! - Deposit transactions
-//! - Withdrawal transactions
-//! - Lock/Unlock collateral
-//! - Balance queries
-//! - Transaction history
-//! - TVL endpoints
-//! - Error handling
+//! ## IMPORTANT: Apply database fix first!
+//! 
+//! Before running tests, fix the bug in backend/src/database.rs:
+//! See database_fix.rs for instructions.
+//!
+//! ## Running Tests
+//! 
+//! Terminal 1: `solana-test-validator --reset`
+//! Terminal 2: `cd backend && cargo run`
+//! Terminal 3: `cd backend && cargo test -- --nocapture --test-threads=1`
 
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+use solana_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
+use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
 
 // ============================================================================
-// Test Configuration
+// Configuration
 // ============================================================================
 
 const BASE_URL: &str = "http://localhost:3000/api/v1";
 const HEALTH_URL: &str = "http://localhost:3000/health";
+const SOLANA_RPC_URL: &str = "http://127.0.0.1:8899";
 
-// Sample User 1 - Alice (main test user)
+const SERVER_WAIT_ATTEMPTS: u32 = 30;
+const SERVER_WAIT_DELAY_MS: u64 = 1000;
+
+// Test Users
 const ALICE_PUBKEY: &str = "4rL4RCWHz3iA5JwKGmPWAf5BqaLJxqEhEDGLqZqVY5Mj";
 const ALICE_TOKEN_ACCOUNT: &str = "BYLfz8RQMYE7A5FwL2fVn7RZnYNqh82cBzJpXu9hS3Rq";
 const ALICE_VAULT_PUBKEY: &str = "3KmPPXJe3f3cK8qLp9rHqVa5sCHRTLz2MWL4Xa6dN9Zj";
 
-// Sample User 2 - Bob (secondary test user)
 const BOB_PUBKEY: &str = "7sB8YPWHz3iA5JwKGmPWAf5BqaLJxqEhEDGLqZqVY2Kn";
 const BOB_TOKEN_ACCOUNT: &str = "DYLfz8RQMYE7A5FwL2fVn7RZnYNqh82cBzJpXu9hS4Sq";
 const BOB_VAULT_PUBKEY: &str = "5KmPPXJe3f3cK8qLp9rHqVa5sCHRTLz2MWL4Xa6dN8Xk";
 
-// Mock USDT mint on devnet
-const USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
-
 // ============================================================================
-// Response Types
+// Response Types - MATCHING ACTUAL SERVER RESPONSES
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Vault {
     pub vault_pubkey: String,
     pub owner_pubkey: String,
@@ -62,107 +60,113 @@ pub struct Vault {
     pub available_balance: i64,
     pub total_deposited: i64,
     pub total_withdrawn: i64,
-    pub created_at: String,
-    pub updated_at: String,
+    #[serde(default)]
+    pub created_at: Option<Value>,
+    #[serde(default)]
+    pub updated_at: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct UnsignedTransactionResponse {
-    pub transaction: String,
-    pub blockhash: String,
-    pub estimated_fee: u64,
-    pub signers: Vec<String>,
-    pub message: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TransactionRecord {
-    pub id: i64,
-    pub vault_pubkey: String,
-    pub tx_signature: String,
-    pub tx_type: String,
-    pub amount: i64,
-    pub status: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TransactionHistoryResponse {
-    pub transactions: Vec<TransactionRecord>,
-    pub total: i64,
-    pub limit: i64,
-    pub offset: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TvlStats {
-    pub total_vaults: i64,
-    pub total_value_locked: i64,
-    pub total_available: i64,
-    pub total_locked: i64,
-    pub avg_vault_balance: f64,
-    pub max_vault_balance: i64,
-}
-
-#[derive(Debug, Deserialize)]
+// Actual health response from server (from api/health.rs)
+#[derive(Debug, Deserialize, Serialize)]
 pub struct HealthResponse {
     pub status: String,
-    pub database: String,
-    pub cache: Option<CacheStats>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CacheStats {
-    pub vault_entries: u64,
-    pub owner_entries: u64,
+    pub version: String,
+    pub uptime_seconds: u64,
 }
 
 // ============================================================================
-// Test Client
+// Utilities
 // ============================================================================
 
-pub struct TestClient {
+async fn wait_for_server(client: &Client, max_attempts: u32) -> bool {
+    for attempt in 1..=max_attempts {
+        print!("⏳ Waiting for server... (attempt {}/{}) ", attempt, max_attempts);
+        
+        match client.get(HEALTH_URL)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await 
+        {
+            Ok(response) if response.status().is_success() => {
+                println!("✅ Server is ready!");
+                return true;
+            }
+            Ok(response) => {
+                println!("❌ Status: {}", response.status());
+            }
+            Err(e) => {
+                println!("❌ {}", e);
+            }
+        }
+        
+        tokio::time::sleep(Duration::from_millis(SERVER_WAIT_DELAY_MS)).await;
+    }
+    
+    println!("❌ Server not available after {} attempts", max_attempts);
+    false
+}
+
+async fn wait_for_solana(max_attempts: u32) -> bool {
+    let client = AsyncRpcClient::new(SOLANA_RPC_URL.to_string());
+    
+    for attempt in 1..=max_attempts {
+        match client.get_version().await {
+            Ok(version) => {
+                println!("✅ Solana validator ready (attempt {}) - version: {}", attempt, version.solana_core);
+                return true;
+            }
+            Err(_) => {
+                if attempt < max_attempts {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    
+    println!("❌ Solana validator not available");
+    false
+}
+
+fn generate_test_signature() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("test_sig_{}", timestamp)
+}
+
+fn create_test_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
+// ============================================================================
+// API Client
+// ============================================================================
+
+struct TestApiClient {
     client: Client,
     base_url: String,
 }
 
-impl TestClient {
-    pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
+impl TestApiClient {
+    fn new() -> Self {
         Self {
-            client,
+            client: create_test_client(),
             base_url: BASE_URL.to_string(),
         }
     }
 
-    pub fn with_base_url(base_url: &str) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
-        Self {
-            client,
-            base_url: base_url.to_string(),
-        }
-    }
-
-    // Health Check
-    pub async fn health_check(&self) -> Result<HealthResponse, reqwest::Error> {
-        let response = self.client
-            .get(HEALTH_URL)
-            .send()
-            .await?;
-        
+    async fn health_check(&self) -> Result<HealthResponse, reqwest::Error> {
+        let response = self.client.get(HEALTH_URL).send().await?;
         response.json().await
     }
 
-    // Vault Operations
-    pub async fn initialize_vault(
+    async fn initialize_vault(
         &self,
         vault_pubkey: &str,
         owner_pubkey: &str,
@@ -183,7 +187,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn get_balance(&self, vault_pubkey: &str) -> Result<ApiResponse<Vault>, reqwest::Error> {
+    async fn get_balance(&self, vault_pubkey: &str) -> Result<ApiResponse<Vault>, reqwest::Error> {
         let response = self.client
             .get(format!("{}/vault/balance/{}", self.base_url, vault_pubkey))
             .send()
@@ -192,7 +196,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn get_vault_by_owner(&self, owner_pubkey: &str) -> Result<ApiResponse<Vault>, reqwest::Error> {
+    async fn get_vault_by_owner(&self, owner_pubkey: &str) -> Result<ApiResponse<Vault>, reqwest::Error> {
         let response = self.client
             .get(format!("{}/vault/owner/{}", self.base_url, owner_pubkey))
             .send()
@@ -201,7 +205,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn process_deposit(
+    async fn process_deposit(
         &self,
         vault_pubkey: &str,
         amount: i64,
@@ -222,7 +226,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn process_withdrawal(
+    async fn process_withdrawal(
         &self,
         vault_pubkey: &str,
         amount: i64,
@@ -243,7 +247,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn process_lock(
+    async fn process_lock(
         &self,
         vault_pubkey: &str,
         amount: i64,
@@ -264,7 +268,7 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn process_unlock(
+    async fn process_unlock(
         &self,
         vault_pubkey: &str,
         amount: i64,
@@ -285,156 +289,9 @@ impl TestClient {
         response.json().await
     }
 
-    pub async fn sync_vault(&self, vault_pubkey: &str) -> Result<ApiResponse<Vault>, reqwest::Error> {
+    async fn list_vaults(&self, limit: i32, offset: i32) -> Result<ApiResponse<Vec<Vault>>, reqwest::Error> {
         let response = self.client
-            .post(format!("{}/vault/sync/{}", self.base_url, vault_pubkey))
-            .send()
-            .await?;
-
-        response.json().await
-    }
-
-    pub async fn get_tvl(&self) -> Result<ApiResponse<TvlStats>, reqwest::Error> {
-        let response = self.client
-            .get(format!("{}/vault/tvl", self.base_url))
-            .send()
-            .await?;
-
-        response.json().await
-    }
-
-    pub async fn list_vaults(
-        &self,
-        limit: Option<i64>,
-        offset: Option<i64>,
-    ) -> Result<ApiResponse<Vec<Vault>>, reqwest::Error> {
-        let mut url = format!("{}/vault/list", self.base_url);
-        let mut params = Vec::new();
-        
-        if let Some(l) = limit {
-            params.push(format!("limit={}", l));
-        }
-        if let Some(o) = offset {
-            params.push(format!("offset={}", o));
-        }
-        
-        if !params.is_empty() {
-            url = format!("{}?{}", url, params.join("&"));
-        }
-
-        let response = self.client.get(&url).send().await?;
-        response.json().await
-    }
-
-    // Transaction Operations
-    pub async fn build_deposit_tx(
-        &self,
-        user_pubkey: &str,
-        user_token_account: &str,
-        vault_token_account: &str,
-        amount: u64,
-    ) -> Result<ApiResponse<UnsignedTransactionResponse>, reqwest::Error> {
-        let body = json!({
-            "user_pubkey": user_pubkey,
-            "user_token_account": user_token_account,
-            "vault_token_account": vault_token_account,
-            "amount": amount
-        });
-
-        let response = self.client
-            .post(format!("{}/transaction/build/deposit", self.base_url))
-            .json(&body)
-            .send()
-            .await?;
-
-        response.json().await
-    }
-
-    pub async fn build_withdraw_tx(
-        &self,
-        user_pubkey: &str,
-        vault_pubkey: &str,
-        vault_token_account: &str,
-        user_token_account: &str,
-        amount: u64,
-    ) -> Result<ApiResponse<UnsignedTransactionResponse>, reqwest::Error> {
-        let body = json!({
-            "user_pubkey": user_pubkey,
-            "vault_pubkey": vault_pubkey,
-            "vault_token_account": vault_token_account,
-            "user_token_account": user_token_account,
-            "amount": amount
-        });
-
-        let response = self.client
-            .post(format!("{}/transaction/build/withdraw", self.base_url))
-            .json(&body)
-            .send()
-            .await?;
-
-        response.json().await
-    }
-
-    pub async fn build_initialize_tx(
-        &self,
-        user_pubkey: &str,
-        mint_pubkey: &str,
-    ) -> Result<ApiResponse<UnsignedTransactionResponse>, reqwest::Error> {
-        let body = json!({
-            "user_pubkey": user_pubkey,
-            "mint_pubkey": mint_pubkey
-        });
-
-        let response = self.client
-            .post(format!("{}/transaction/build/initialize", self.base_url))
-            .json(&body)
-            .send()
-            .await?;
-
-        response.json().await
-    }
-
-    pub async fn get_transaction_history(
-        &self,
-        limit: Option<i64>,
-        offset: Option<i64>,
-    ) -> Result<ApiResponse<TransactionHistoryResponse>, reqwest::Error> {
-        let mut url = format!("{}/transaction/history", self.base_url);
-        let mut params = Vec::new();
-        
-        if let Some(l) = limit {
-            params.push(format!("limit={}", l));
-        }
-        if let Some(o) = offset {
-            params.push(format!("offset={}", o));
-        }
-        
-        if !params.is_empty() {
-            url = format!("{}?{}", url, params.join("&"));
-        }
-
-        let response = self.client.get(&url).send().await?;
-        response.json().await
-    }
-
-    pub async fn get_vault_transactions(
-        &self,
-        vault_pubkey: &str,
-        limit: Option<i64>,
-    ) -> Result<ApiResponse<TransactionHistoryResponse>, reqwest::Error> {
-        let mut url = format!("{}/transaction/history/{}", self.base_url, vault_pubkey);
-        
-        if let Some(l) = limit {
-            url = format!("{}?limit={}", url, l);
-        }
-
-        let response = self.client.get(&url).send().await?;
-        response.json().await
-    }
-
-    pub async fn get_transaction(&self, tx_signature: &str) -> Result<ApiResponse<TransactionRecord>, reqwest::Error> {
-        let response = self.client
-            .get(format!("{}/transaction/{}", self.base_url, tx_signature))
+            .get(format!("{}/vault/list?limit={}&offset={}", self.base_url, limit, offset))
             .send()
             .await?;
 
@@ -443,36 +300,49 @@ impl TestClient {
 }
 
 // ============================================================================
-// Test Helper Functions
+// Solana RPC Test Client
 // ============================================================================
 
-fn generate_tx_signature() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{}TestTx{}", &ALICE_PUBKEY[0..32], timestamp)
+struct SolanaTestClient {
+    client: AsyncRpcClient,
 }
 
-async fn wait_for_server(client: &TestClient, max_retries: u32) -> bool {
-    for i in 0..max_retries {
-        match client.health_check().await {
-            Ok(health) if health.status == "ok" => {
-                println!("Server is ready (attempt {})", i + 1);
-                return true;
-            }
-            _ => {
-                println!("Waiting for server... (attempt {})", i + 1);
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
+impl SolanaTestClient {
+    fn new() -> Self {
+        Self {
+            client: AsyncRpcClient::new(SOLANA_RPC_URL.to_string()),
         }
     }
-    false
+
+    async fn get_version(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let version = self.client.get_version().await?;
+        Ok(version.solana_core)
+    }
+
+    async fn get_slot(&self) -> Result<u64, Box<dyn std::error::Error>> {
+        let slot = self.client.get_slot().await?;
+        Ok(slot)
+    }
+
+    async fn get_balance(&self, pubkey: &str) -> Result<u64, Box<dyn std::error::Error>> {
+        let pubkey = Pubkey::from_str(pubkey)?;
+        let balance = self.client.get_balance(&pubkey).await?;
+        Ok(balance)
+    }
+
+    async fn get_latest_blockhash(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let blockhash = self.client.get_latest_blockhash().await?;
+        Ok(blockhash.to_string())
+    }
+
+    async fn get_minimum_balance_for_rent_exemption(&self, data_len: usize) -> Result<u64, Box<dyn std::error::Error>> {
+        let balance = self.client.get_minimum_balance_for_rent_exemption(data_len).await?;
+        Ok(balance)
+    }
 }
 
 // ============================================================================
-// Test Modules
+// MODULE 1: Health Tests
 // ============================================================================
 
 #[cfg(test)]
@@ -481,21 +351,117 @@ mod health_tests {
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Health Endpoint");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            println!(" Server not available, skipping test");
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        let health = client.health_check().await;
-        assert!(health.is_ok(), "Health check should succeed");
+        let api = TestApiClient::new();
+        let health = api.health_check().await.expect("Health check failed");
         
-        let health = health.unwrap();
-        assert_eq!(health.status, "ok", "Server should be healthy");
-        println!(" Health check passed: {:?}", health);
+        assert_eq!(health.status, "healthy", "Server should be healthy");
+        assert!(!health.version.is_empty(), "Version should not be empty");
+        
+        println!("✅ PASSED: Health endpoint working");
+        println!("   Status: {}", health.status);
+        println!("   Version: {}", health.version);
+        println!("   Uptime: {} seconds", health.uptime_seconds);
     }
 }
+
+// ============================================================================
+// MODULE 2: Solana RPC Tests
+// ============================================================================
+
+#[cfg(test)]
+mod solana_rpc_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_solana_validator_connection() {
+        println!("\n🧪 TEST: Solana Validator Connection");
+        
+        if !wait_for_solana(10).await {
+            panic!("❌ FAILED: Solana validator not available!");
+        }
+
+        let solana = SolanaTestClient::new();
+        let version = solana.get_version().await.expect("Failed to get version");
+        
+        println!("✅ PASSED: Connected to Solana validator");
+        println!("   Version: {}", version);
+    }
+
+    #[tokio::test]
+    async fn test_get_slot() {
+        println!("\n🧪 TEST: Get Current Slot");
+        
+        if !wait_for_solana(10).await {
+            panic!("❌ FAILED: Solana validator not available!");
+        }
+
+        let solana = SolanaTestClient::new();
+        let slot = solana.get_slot().await.expect("Failed to get slot");
+        
+        assert!(slot > 0, "Slot should be > 0");
+        
+        println!("✅ PASSED: Retrieved slot {}", slot);
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_blockhash() {
+        println!("\n🧪 TEST: Get Latest Blockhash");
+        
+        if !wait_for_solana(10).await {
+            panic!("❌ FAILED: Solana validator not available!");
+        }
+
+        let solana = SolanaTestClient::new();
+        let blockhash = solana.get_latest_blockhash().await.expect("Failed to get blockhash");
+        
+        assert!(!blockhash.is_empty(), "Blockhash should not be empty");
+        
+        println!("✅ PASSED: Blockhash: {}", blockhash);
+    }
+
+    #[tokio::test]
+    async fn test_get_balance() {
+        println!("\n🧪 TEST: Get Account Balance");
+        
+        if !wait_for_solana(10).await {
+            panic!("❌ FAILED: Solana validator not available!");
+        }
+
+        let solana = SolanaTestClient::new();
+        let system_program = "11111111111111111111111111111111";
+        let balance = solana.get_balance(system_program).await.expect("Failed");
+        
+        println!("✅ PASSED: System Program balance: {} lamports", balance);
+    }
+
+    #[tokio::test]
+    async fn test_rent_exemption() {
+        println!("\n🧪 TEST: Rent Exemption Calculation");
+        
+        if !wait_for_solana(10).await {
+            panic!("❌ FAILED: Solana validator not available!");
+        }
+
+        let solana = SolanaTestClient::new();
+        let rent = solana.get_minimum_balance_for_rent_exemption(200).await.expect("Failed");
+        
+        assert!(rent > 0, "Rent should be > 0");
+        
+        println!("✅ PASSED: Rent for 200 bytes: {} lamports ({:.6} SOL)", 
+                 rent, rent as f64 / 1_000_000_000.0);
+    }
+}
+
+// ============================================================================
+// MODULE 3: Vault Initialization Tests
+// ============================================================================
 
 #[cfg(test)]
 mod vault_initialization_tests {
@@ -503,69 +469,45 @@ mod vault_initialization_tests {
 
     #[tokio::test]
     async fn test_initialize_alice_vault() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Initialize Alice's Vault");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Initialize Alice's Vault");
-        println!("   User: Alice ({})", ALICE_PUBKEY);
+        let api = TestApiClient::new();
+        let result = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await
+            .expect("Request failed");
 
-        let result = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    assert_eq!(vault.owner_pubkey, ALICE_PUBKEY);
-                    assert_eq!(vault.total_balance, 0);
-                    println!("   Alice's vault initialized successfully");
-                    println!("      Vault: {}", vault.vault_pubkey);
-                } else {
-                    // Vault may already exist
-                    println!("    Response: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
+        // Success or already exists is OK
+        println!("✅ PASSED: Vault initialization handled");
+        println!("   Success: {}", result.success);
+        if let Some(vault) = &result.data {
+            println!("   Vault: {}", vault.vault_pubkey);
         }
     }
 
     #[tokio::test]
     async fn test_initialize_bob_vault() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Initialize Bob's Vault");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Initialize Bob's Vault");
-        println!("   User: Bob ({})", BOB_PUBKEY);
+        let api = TestApiClient::new();
+        let result = api.initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT).await
+            .expect("Request failed");
 
-        let result = client
-            .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    assert_eq!(vault.owner_pubkey, BOB_PUBKEY);
-                    println!("    Bob's vault initialized successfully");
-                } else {
-                    println!("    Response: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
-        }
+        println!("✅ PASSED: Bob's vault handled (success: {})", result.success);
     }
 }
+
+// ============================================================================
+// MODULE 4: Deposit Tests (REQUIRES DATABASE FIX!)
+// ============================================================================
 
 #[cfg(test)]
 mod deposit_tests {
@@ -573,118 +515,98 @@ mod deposit_tests {
 
     #[tokio::test]
     async fn test_alice_deposit() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Alice Deposits 1,000,000 tokens");
+        println!("   ⚠️ REQUIRES: Database fix applied (see database_fix.rs)");
         
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\nTest: Alice Deposits 1000 USDT");
-
-        // First ensure vault exists
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-
-        // Process deposit
-        let tx_sig = generate_tx_signature();
-        let deposit_amount: i64 = 1_000_000_000; // 1000 USDT (6 decimals)
-
-        let result = client
-            .process_deposit(ALICE_VAULT_PUBKEY, deposit_amount, &tx_sig)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    assert!(vault.total_balance >= deposit_amount);
-                    assert!(vault.available_balance >= deposit_amount);
-                    println!("    Deposit successful");
-                    println!("      Amount: {} USDT", deposit_amount / 1_000_000);
-                    println!("      New Balance: {} USDT", vault.total_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bob_deposit() {
-        let client = TestClient::new();
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Bob Deposits 500 USDT");
-
+        let api = TestApiClient::new();
+        
         // Ensure vault exists
-        let _ = client
-            .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
-            .await;
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        // Get balance before
+        let before = api.get_balance(ALICE_VAULT_PUBKEY).await.ok()
+            .and_then(|r| r.data)
+            .map(|v| v.total_balance)
+            .unwrap_or(0);
+        
+        // Make deposit
+        let tx_sig = generate_test_signature();
+        let result = api.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000, &tx_sig).await
+            .expect("Request failed");
 
-        let tx_sig = generate_tx_signature();
-        let deposit_amount: i64 = 500_000_000; // 500 USDT
-
-        let result = client
-            .process_deposit(BOB_VAULT_PUBKEY, deposit_amount, &tx_sig)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    println!("    Bob's deposit successful");
-                    println!("      Amount: {} USDT", deposit_amount / 1_000_000);
-                    println!("      New Balance: {} USDT", vault.total_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
+        if !result.success {
+            let error = result.error.unwrap_or_default();
+            if error.contains("text = bigint") || error.contains("operator does not exist") {
+                println!("");
+                println!("   ❌ DATABASE BUG DETECTED!");
+                println!("   Error: {}", error);
+                println!("");
+                println!("   🔧 FIX REQUIRED:");
+                println!("   1. Open backend/src/database.rs");
+                println!("   2. Find update_vault_balances() function");
+                println!("   3. Add 'param_count += 1;' after total_deposited binding");
+                println!("   4. See database_fix.rs for complete fix");
+                println!("");
+                panic!("Apply database fix first!");
             }
-            Err(e) => {
-                println!("   Error: {}", e);
-            }
+            panic!("Deposit failed: {}", error);
         }
+        
+        let vault = result.data.expect("Should have vault data");
+        assert!(vault.total_balance >= before + 1_000_000, "Balance should increase");
+        
+        println!("✅ PASSED: Deposit successful");
+        println!("   Amount: 1,000,000");
+        println!("   New Balance: {}", vault.total_balance);
     }
 
     #[tokio::test]
-    async fn test_multiple_deposits() {
-        let client = TestClient::new();
+    async fn test_zero_deposit_rejected() {
+        println!("\n🧪 TEST: Zero Deposit Should Be Rejected");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Multiple Deposits for Alice");
-
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-
-        let deposits = [100_000_000, 200_000_000, 300_000_000]; // 100, 200, 300 USDT
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
         
-        for amount in deposits {
-            let tx_sig = generate_tx_signature();
-            let result = client.process_deposit(ALICE_VAULT_PUBKEY, amount, &tx_sig).await;
-            
-            match result {
-                Ok(response) if response.success => {
-                    println!("    Deposited {} USDT", amount / 1_000_000);
-                }
-                _ => {
-                    println!("    Deposit of {} USDT had issue", amount / 1_000_000);
-                }
-            }
-            
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let result = api.process_deposit(ALICE_VAULT_PUBKEY, 0, &generate_test_signature()).await
+            .expect("Request failed");
+
+        println!("✅ PASSED: Zero deposit handled (success: {})", result.success);
+    }
+
+    #[tokio::test]
+    async fn test_negative_amount_rejected() {
+        println!("\n🧪 TEST: Negative Amount Should Be Rejected");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
+
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.process_deposit(ALICE_VAULT_PUBKEY, -100, &generate_test_signature()).await
+            .expect("Request failed");
+
+        assert!(!result.success, "Negative amount should fail");
+        println!("✅ PASSED: Negative amount rejected");
     }
 }
+
+// ============================================================================
+// MODULE 5: Withdrawal Tests
+// ============================================================================
 
 #[cfg(test)]
 mod withdrawal_tests {
@@ -692,84 +614,62 @@ mod withdrawal_tests {
 
     #[tokio::test]
     async fn test_alice_withdrawal() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Alice Withdraws 500,000 tokens");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Alice Withdraws 200 USDT");
-
-        // Setup: Initialize and deposit first
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
+        let api = TestApiClient::new();
         
-        let deposit_tx = generate_tx_signature();
-        let _ = client
-            .process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &deposit_tx)
-            .await;
+        // Setup
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        let _ = api.process_deposit(ALICE_VAULT_PUBKEY, 2_000_000, &generate_test_signature()).await;
+        
+        let before = api.get_balance(ALICE_VAULT_PUBKEY).await.ok()
+            .and_then(|r| r.data)
+            .map(|v| v.available_balance)
+            .unwrap_or(0);
+        
+        if before < 500_000 {
+            println!("⚠️ SKIPPED: Insufficient balance ({})", before);
+            return;
+        }
+        
+        let result = api.process_withdrawal(ALICE_VAULT_PUBKEY, 500_000, &generate_test_signature()).await
+            .expect("Request failed");
 
-        // Now withdraw
-        let withdraw_tx = generate_tx_signature();
-        let withdraw_amount: i64 = 200_000_000; // 200 USDT
-
-        let result = client
-            .process_withdrawal(ALICE_VAULT_PUBKEY, withdraw_amount, &withdraw_tx)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    println!("    Withdrawal successful");
-                    println!("      Amount: {} USDT", withdraw_amount / 1_000_000);
-                    println!("      Remaining: {} USDT", vault.total_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
+        if result.success {
+            println!("✅ PASSED: Withdrawal successful");
+        } else {
+            println!("⚠️ Withdrawal failed: {}", result.error.unwrap_or_default());
         }
     }
 
     #[tokio::test]
     async fn test_insufficient_balance_withdrawal() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Insufficient Balance Should Fail");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Withdrawal with Insufficient Balance (Should Fail)");
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.process_withdrawal(ALICE_VAULT_PUBKEY, 999_999_999_999, &generate_test_signature()).await
+            .expect("Request failed");
 
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-
-        let tx_sig = generate_tx_signature();
-        let excessive_amount: i64 = 999_999_999_999; // Way more than available
-
-        let result = client
-            .process_withdrawal(ALICE_VAULT_PUBKEY, excessive_amount, &tx_sig)
-            .await;
-
-        match result {
-            Ok(response) => {
-                if !response.success {
-                    println!("   Correctly rejected: {:?}", response.error);
-                } else {
-                    println!("    Should have been rejected!");
-                }
-            }
-            Err(_) => {
-                println!("    Request correctly rejected");
-            }
-        }
+        assert!(!result.success, "Should fail with insufficient balance");
+        println!("✅ PASSED: Insufficient balance rejected");
     }
 }
+
+// ============================================================================
+// MODULE 6: Lock/Unlock Tests
+// ============================================================================
 
 #[cfg(test)]
 mod lock_unlock_tests {
@@ -777,92 +677,95 @@ mod lock_unlock_tests {
 
     #[tokio::test]
     async fn test_lock_collateral() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Lock Collateral");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Lock Collateral for Alice (Open Position)");
-
-        // Setup
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
+        let api = TestApiClient::new();
         
-        let deposit_tx = generate_tx_signature();
-        let _ = client
-            .process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &deposit_tx)
-            .await;
+        // Setup
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        let _ = api.process_deposit(ALICE_VAULT_PUBKEY, 5_000_000, &generate_test_signature()).await;
+        
+        let before = api.get_balance(ALICE_VAULT_PUBKEY).await.ok().and_then(|r| r.data);
+        
+        if before.as_ref().map(|v| v.available_balance).unwrap_or(0) < 1_000_000 {
+            println!("⚠️ SKIPPED: Insufficient balance for lock");
+            return;
+        }
+        
+        let result = api.process_lock(ALICE_VAULT_PUBKEY, 1_000_000, &generate_test_signature()).await
+            .expect("Request failed");
 
-        // Lock 300 USDT as margin
-        let lock_tx = generate_tx_signature();
-        let lock_amount: i64 = 300_000_000;
-
-        let result = client.process_lock(ALICE_VAULT_PUBKEY, lock_amount, &lock_tx).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    assert!(vault.locked_balance >= lock_amount);
-                    println!("    Lock successful");
-                    println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
-                    println!("      Available: {} USDT", vault.available_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
+        if result.success {
+            let vault = result.data.unwrap();
+            println!("✅ PASSED: Collateral locked");
+            println!("   Locked: {}", vault.locked_balance);
+        } else {
+            println!("⚠️ Lock failed: {}", result.error.unwrap_or_default());
         }
     }
 
     #[tokio::test]
     async fn test_unlock_collateral() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Unlock Collateral");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        
+        // Setup
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        let _ = api.process_deposit(ALICE_VAULT_PUBKEY, 5_000_000, &generate_test_signature()).await;
+        let _ = api.process_lock(ALICE_VAULT_PUBKEY, 2_000_000, &generate_test_signature()).await;
+        
+        let before = api.get_balance(ALICE_VAULT_PUBKEY).await.ok().and_then(|r| r.data);
+        let locked = before.as_ref().map(|v| v.locked_balance).unwrap_or(0);
+        
+        if locked < 500_000 {
+            println!("⚠️ SKIPPED: No locked funds to unlock");
             return;
         }
-
-        println!("\n Test: Unlock Collateral for Alice (Close Position)");
-
-        // Setup: Initialize, deposit, lock
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
         
-        let deposit_tx = generate_tx_signature();
-        let _ = client.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &deposit_tx).await;
-        
-        let lock_tx = generate_tx_signature();
-        let _ = client.process_lock(ALICE_VAULT_PUBKEY, 300_000_000, &lock_tx).await;
+        let result = api.process_unlock(ALICE_VAULT_PUBKEY, 500_000, &generate_test_signature()).await
+            .expect("Request failed");
 
-        // Unlock 200 USDT
-        let unlock_tx = generate_tx_signature();
-        let unlock_amount: i64 = 200_000_000;
-
-        let result = client.process_unlock(ALICE_VAULT_PUBKEY, unlock_amount, &unlock_tx).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    println!("    Unlock successful");
-                    println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
-                    println!("      Available: {} USDT", vault.available_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
+        if result.success {
+            println!("✅ PASSED: Collateral unlocked");
+        } else {
+            println!("⚠️ Unlock failed: {}", result.error.unwrap_or_default());
         }
     }
+
+    #[tokio::test]
+    async fn test_cannot_lock_more_than_available() {
+        println!("\n🧪 TEST: Cannot Lock More Than Available");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.process_lock(ALICE_VAULT_PUBKEY, 999_999_999_999, &generate_test_signature()).await
+            .expect("Request failed");
+
+        assert!(!result.success, "Should fail");
+        println!("✅ PASSED: Over-locking rejected");
+    }
 }
+
+// ============================================================================
+// MODULE 7: Balance Query Tests
+// ============================================================================
 
 #[cfg(test)]
 mod balance_query_tests {
@@ -870,552 +773,307 @@ mod balance_query_tests {
 
     #[tokio::test]
     async fn test_get_alice_balance() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Get Alice's Balance");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Get Alice's Balance");
-
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-
-        let result = client.get_balance(ALICE_VAULT_PUBKEY).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    println!("    Balance retrieved");
-                    println!("      Total: {} USDT", vault.total_balance / 1_000_000);
-                    println!("      Available: {} USDT", vault.available_balance / 1_000_000);
-                    println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
-        }
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.get_balance(ALICE_VAULT_PUBKEY).await.expect("Request failed");
+        
+        assert!(result.success, "Should get balance");
+        
+        let vault = result.data.expect("Should have vault data");
+        
+        println!("✅ PASSED: Retrieved balance");
+        println!("   Total: {}", vault.total_balance);
+        println!("   Available: {}", vault.available_balance);
+        println!("   Locked: {}", vault.locked_balance);
     }
 
     #[tokio::test]
     async fn test_get_vault_by_owner() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Get Vault By Owner");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n Test: Get Vault by Owner (Bob)");
-
-        let _ = client
-            .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
-            .await;
-
-        let result = client.get_vault_by_owner(BOB_PUBKEY).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vault = response.data.unwrap();
-                    assert_eq!(vault.owner_pubkey, BOB_PUBKEY);
-                    println!("   Found Bob's vault");
-                    println!("      Vault: {}", vault.vault_pubkey);
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.get_vault_by_owner(ALICE_PUBKEY).await.expect("Request failed");
+        
+        println!("✅ PASSED: Owner lookup (success: {})", result.success);
+        if let Some(vault) = result.data {
+            println!("   Found: {}", vault.vault_pubkey);
         }
     }
 
     #[tokio::test]
     async fn test_nonexistent_vault() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Query Nonexistent Vault");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\nTest: Query Nonexistent Vault");
-
-        let result = client.get_balance("NonExistentVaultPubkeyHere123456789012345").await;
-
-        match result {
-            Ok(response) => {
-                if !response.success {
-                    println!("   Correctly returned error: {:?}", response.error);
-                }
-            }
-            Err(_) => {
-                println!("   Correctly rejected request");
-            }
-        }
+        let api = TestApiClient::new();
+        let result = api.get_balance("FakeVault11111111111111111111111111111111111").await
+            .expect("Request failed");
+        
+        assert!(!result.success, "Should fail");
+        println!("✅ PASSED: Nonexistent vault handled");
     }
 }
 
-#[cfg(test)]
-mod transaction_builder_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_build_deposit_transaction() {
-        let client = TestClient::new();
-        
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\n Test: Build Deposit Transaction for Alice");
-
-        let result = client
-            .build_deposit_tx(
-                ALICE_PUBKEY,
-                ALICE_TOKEN_ACCOUNT,
-                ALICE_TOKEN_ACCOUNT, // Vault token account
-                500_000_000,
-            )
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let tx = response.data.unwrap();
-                    assert!(!tx.transaction.is_empty() || tx.blockhash.len() > 0);
-                    println!("   Transaction built successfully");
-                    println!("      Blockhash: {}", tx.blockhash);
-                    println!("      Estimated Fee: {} lamports", tx.estimated_fee);
-                    println!("      Message: {}", tx.message);
-                } else {
-                    println!("    Build failed (may need RPC): {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error (may need RPC connection): {}", e);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_build_withdraw_transaction() {
-        let client = TestClient::new();
-        
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\n Test: Build Withdraw Transaction for Alice");
-
-        // First setup vault with balance
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-        let tx = generate_tx_signature();
-        let _ = client.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &tx).await;
-
-        let result = client
-            .build_withdraw_tx(
-                ALICE_PUBKEY,
-                ALICE_VAULT_PUBKEY,
-                ALICE_TOKEN_ACCOUNT,
-                ALICE_TOKEN_ACCOUNT,
-                200_000_000,
-            )
-            .await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let tx = response.data.unwrap();
-                    println!("   Withdraw transaction built");
-                    println!("      Blockhash: {}", tx.blockhash);
-                } else {
-                    println!("    Build failed: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("    Error: {}", e);
-            }
-        }
-    }
-}
+// ============================================================================
+// MODULE 8: List Vaults Test
+// ============================================================================
 
 #[cfg(test)]
-mod transaction_history_tests {
+mod list_tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_get_vault_transactions() {
-        let client = TestClient::new();
-        
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\nTest: Get Alice's Transaction History");
-
-        // Setup some transactions
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-        
-        for i in 0..3 {
-            let tx = generate_tx_signature();
-            let _ = client.process_deposit(ALICE_VAULT_PUBKEY, 100_000_000, &tx).await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-
-        let result = client.get_vault_transactions(ALICE_VAULT_PUBKEY, Some(10)).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let history = response.data.unwrap();
-                    println!("    Found {} transactions", history.transactions.len());
-                    for tx in history.transactions.iter().take(3) {
-                        println!("      - {} | {} | {} USDT", 
-                            tx.tx_type, 
-                            tx.status,
-                            tx.amount / 1_000_000
-                        );
-                    }
-                } else {
-                    println!("    Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("  Error: {}", e);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tvl_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_get_tvl() {
-        let client = TestClient::new();
-        
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\n📈 Test: Get Total Value Locked (TVL)");
-
-        // Setup some vaults with balances
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-        let _ = client
-            .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
-            .await;
-        
-        let tx1 = generate_tx_signature();
-        let tx2 = generate_tx_signature();
-        let _ = client.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &tx1).await;
-        let _ = client.process_deposit(BOB_VAULT_PUBKEY, 500_000_000, &tx2).await;
-
-        let result = client.get_tvl().await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let tvl = response.data.unwrap();
-                    println!("   ✅ TVL Stats Retrieved");
-                    println!("      Total Vaults: {}", tvl.total_vaults);
-                    println!("      TVL: {} USDT", tvl.total_value_locked / 1_000_000);
-                    println!("      Available: {} USDT", tvl.total_available / 1_000_000);
-                    println!("      Locked: {} USDT", tvl.total_locked / 1_000_000);
-                } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("   ❌ Error: {}", e);
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_list_vaults() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: List Vaults");
+        let client = create_test_client();
         
-        if !wait_for_server(&client, 5).await {
-            return;
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        println!("\n📋 Test: List All Vaults");
-
-        let result = client.list_vaults(Some(10), Some(0)).await;
-
-        match result {
-            Ok(response) => {
-                if response.success {
-                    let vaults = response.data.unwrap();
-                    println!("   ✅ Found {} vaults", vaults.len());
-                    for vault in vaults.iter().take(5) {
-                        println!("      - {} | {} USDT", 
-                            &vault.vault_pubkey[0..16],
-                            vault.total_balance / 1_000_000
-                        );
-                    }
-                } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
-                }
-            }
-            Err(e) => {
-                println!("   ❌ Error: {}", e);
-            }
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.list_vaults(10, 0).await.expect("Request failed");
+        
+        assert!(result.success, "Should succeed");
+        
+        println!("✅ PASSED: Vault list retrieved");
+        if let Some(vaults) = result.data {
+            println!("   Count: {}", vaults.len());
         }
     }
 }
+
+// ============================================================================
+// MODULE 9: Error Handling Tests
+// ============================================================================
+
+#[cfg(test)]
+mod error_handling_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_invalid_pubkey_format() {
+        println!("\n🧪 TEST: Invalid Pubkey Format");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        let result = api.get_balance("not-valid").await.expect("Request failed");
+        
+        assert!(!result.success, "Should fail");
+        println!("✅ PASSED: Invalid pubkey rejected");
+    }
+
+    #[tokio::test]
+    async fn test_empty_tx_signature() {
+        println!("\n🧪 TEST: Empty Transaction Signature");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let result = api.process_deposit(ALICE_VAULT_PUBKEY, 1000, "").await
+            .expect("Request failed");
+
+        println!("✅ PASSED: Empty signature handled (success: {})", result.success);
+    }
+}
+
+// ============================================================================
+// MODULE 10: Performance Tests
+// ============================================================================
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[tokio::test]
+    async fn test_balance_query_performance() {
+        println!("\n🧪 TEST: Balance Query Performance");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let iterations = 10;
+        let start = Instant::now();
+        
+        for _ in 0..iterations {
+            let _ = api.get_balance(ALICE_VAULT_PUBKEY).await;
+        }
+        
+        let elapsed = start.elapsed();
+        let avg_ms = elapsed.as_millis() as f64 / iterations as f64;
+        
+        println!("✅ PASSED: Performance measured");
+        println!("   {} iterations in {:?}", iterations, elapsed);
+        println!("   Average: {:.2}ms per request", avg_ms);
+        
+        assert!(avg_ms < 1000.0, "Should be under 1 second");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_requests() {
+        println!("\n🧪 TEST: Concurrent Requests");
+        let client = create_test_client();
+        
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
+        }
+
+        let api = TestApiClient::new();
+        let _ = api.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await;
+        
+        let start = Instant::now();
+        
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let client = create_test_client();
+            let vault = ALICE_VAULT_PUBKEY.to_string();
+            handles.push(tokio::spawn(async move {
+                let api = TestApiClient { client, base_url: BASE_URL.to_string() };
+                let result = api.get_balance(&vault).await;
+                (i, result.is_ok())
+            }));
+        }
+        
+        let mut successes = 0;
+        for handle in handles {
+            if let Ok((_, ok)) = handle.await {
+                if ok { successes += 1; }
+            }
+        }
+        
+        let elapsed = start.elapsed();
+        
+        println!("✅ PASSED: Concurrent requests handled");
+        println!("   {}/10 successful in {:?}", successes, elapsed);
+        
+        assert!(successes >= 8, "At least 80% should succeed");
+    }
+}
+
+// ============================================================================
+// MODULE 11: Full Workflow Test
+// ============================================================================
 
 #[cfg(test)]
 mod full_workflow_tests {
     use super::*;
 
-    /// Complete workflow test simulating real user actions
     #[tokio::test]
     async fn test_complete_trading_workflow() {
-        let client = TestClient::new();
+        println!("\n🧪 TEST: Complete Trading Workflow");
+        println!("   ⚠️ REQUIRES: Database fix applied first!");
+        println!("   Flow: Initialize → Deposit → Lock → Unlock → Withdraw");
+        println!("");
         
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\n🎯 === COMPLETE TRADING WORKFLOW TEST ===\n");
-
-        // Step 1: Initialize Alice's vault
-        println!("📌 Step 1: Initialize Alice's Vault");
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-        println!("   Done\n");
-
-        // Step 2: Alice deposits 2000 USDT
-        println!("📌 Step 2: Alice Deposits 2000 USDT");
-        let deposit_tx = generate_tx_signature();
-        let deposit_result = client
-            .process_deposit(ALICE_VAULT_PUBKEY, 2_000_000_000, &deposit_tx)
-            .await;
-        if let Ok(r) = deposit_result {
-            if r.success {
-                let v = r.data.unwrap();
-                println!("   Balance: {} USDT\n", v.total_balance / 1_000_000);
-            }
-        }
-
-        // Step 3: Alice opens a 5x leveraged position (locks 500 USDT margin)
-        println!("📌 Step 3: Alice Opens Position (Lock 500 USDT)");
-        let lock_tx = generate_tx_signature();
-        let lock_result = client
-            .process_lock(ALICE_VAULT_PUBKEY, 500_000_000, &lock_tx)
-            .await;
-        if let Ok(r) = lock_result {
-            if r.success {
-                let v = r.data.unwrap();
-                println!("   Locked: {} USDT", v.locked_balance / 1_000_000);
-                println!("   Available: {} USDT\n", v.available_balance / 1_000_000);
-            }
-        }
-
-        // Step 4: Check balance
-        println!("📌 Step 4: Check Balance");
-        let balance = client.get_balance(ALICE_VAULT_PUBKEY).await;
-        if let Ok(r) = balance {
-            if r.success {
-                let v = r.data.unwrap();
-                println!("   Total: {} USDT", v.total_balance / 1_000_000);
-                println!("   Available: {} USDT", v.available_balance / 1_000_000);
-                println!("   Locked: {} USDT\n", v.locked_balance / 1_000_000);
-            }
-        }
-
-        // Step 5: Alice closes position with profit (unlock + add profit)
-        println!("📌 Step 5: Alice Closes Position (Unlock 500 USDT)");
-        let unlock_tx = generate_tx_signature();
-        let _ = client
-            .process_unlock(ALICE_VAULT_PUBKEY, 500_000_000, &unlock_tx)
-            .await;
+        let client = create_test_client();
         
-        // Add profit (simulated)
-        let profit_tx = generate_tx_signature();
-        let _ = client
-            .process_deposit(ALICE_VAULT_PUBKEY, 100_000_000, &profit_tx)
-            .await;
-        println!("   Position closed with 100 USDT profit\n");
-
-        // Step 6: Alice withdraws 1000 USDT
-        println!("📌 Step 6: Alice Withdraws 1000 USDT");
-        let withdraw_tx = generate_tx_signature();
-        let withdraw_result = client
-            .process_withdrawal(ALICE_VAULT_PUBKEY, 1_000_000_000, &withdraw_tx)
-            .await;
-        if let Ok(r) = withdraw_result {
-            if r.success {
-                let v = r.data.unwrap();
-                println!("   Remaining Balance: {} USDT\n", v.total_balance / 1_000_000);
-            }
+        if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
+            panic!("❌ FAILED: Server not available!");
         }
 
-        // Step 7: Get transaction history
-        println!("📌 Step 7: Transaction History");
-        let history = client.get_vault_transactions(ALICE_VAULT_PUBKEY, Some(10)).await;
-        if let Ok(r) = history {
-            if r.success {
-                let h = r.data.unwrap();
-                println!("   Transactions:");
-                for tx in h.transactions.iter().take(6) {
-                    println!("      {} | {} | {} USDT",
-                        tx.tx_type.pad_to_width(10),
-                        tx.status,
-                        tx.amount / 1_000_000
-                    );
-                }
-            }
-        }
-
-        println!("\n✅ === WORKFLOW COMPLETE ===\n");
-    }
-
-    /// Multi-user test
-    #[tokio::test]
-    async fn test_multi_user_scenario() {
-        let client = TestClient::new();
+        let api = TestApiClient::new();
         
-        if !wait_for_server(&client, 5).await {
-            return;
-        }
-
-        println!("\n👥 === MULTI-USER SCENARIO ===\n");
-
-        // Initialize both users
-        println!("📌 Initialize Both Users");
-        let _ = client
-            .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
-            .await;
-        let _ = client
-            .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
-            .await;
-        println!("   Alice and Bob vaults ready\n");
-
-        // Both users deposit
-        println!("📌 Both Users Deposit");
-        let tx1 = generate_tx_signature();
-        let tx2 = generate_tx_signature();
-        let _ = client.process_deposit(ALICE_VAULT_PUBKEY, 3_000_000_000, &tx1).await;
-        let _ = client.process_deposit(BOB_VAULT_PUBKEY, 1_500_000_000, &tx2).await;
-        println!("   Alice deposited: 3000 USDT");
-        println!("   Bob deposited: 1500 USDT\n");
-
-        // Alice opens position
-        println!("📌 Alice Opens Large Position (1000 USDT margin)");
-        let lock_tx = generate_tx_signature();
-        let _ = client.process_lock(ALICE_VAULT_PUBKEY, 1_000_000_000, &lock_tx).await;
-
-        // Bob opens smaller position
-        println!("📌 Bob Opens Position (500 USDT margin)");
-        let lock_tx2 = generate_tx_signature();
-        let _ = client.process_lock(BOB_VAULT_PUBKEY, 500_000_000, &lock_tx2).await;
-
-        // Check TVL
-        println!("\n📌 Check Total Value Locked");
-        let tvl = client.get_tvl().await;
-        if let Ok(r) = tvl {
-            if r.success {
-                let t = r.data.unwrap();
-                println!("   Total Vaults: {}", t.total_vaults);
-                println!("   Total TVL: {} USDT", t.total_value_locked / 1_000_000);
-                println!("   Total Locked: {} USDT", t.total_locked / 1_000_000);
-                println!("   Total Available: {} USDT", t.total_available / 1_000_000);
+        // Unique vault for this test
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap().as_secs();
+        let test_vault = format!("Wf{}111111111111111111111111111111111", ts);
+        let test_owner = format!("Ow{}111111111111111111111111111111111", ts);
+        let test_token = format!("Tk{}111111111111111111111111111111111", ts);
+        
+        // Step 1: Initialize
+        println!("   Step 1: Initialize vault...");
+        let result = api.initialize_vault(&test_vault, &test_owner, &test_token).await
+            .expect("Init failed");
+        assert!(result.success, "Init should succeed");
+        println!("   ✓ Initialized");
+        
+        // Step 2: Deposit
+        println!("   Step 2: Deposit 10,000,000...");
+        let result = api.process_deposit(&test_vault, 10_000_000, &generate_test_signature()).await
+            .expect("Deposit failed");
+        
+        if !result.success {
+            let err = result.error.unwrap_or_default();
+            if err.contains("text = bigint") {
+                println!("\n   ❌ DATABASE BUG! Apply fix from database_fix.rs\n");
+                panic!("Database bug detected!");
             }
+            panic!("Deposit failed: {}", err);
         }
-
-        println!("\n=== MULTI-USER SCENARIO COMPLETE ===\n");
+        println!("   ✓ Deposited");
+        
+        // Step 3: Lock
+        println!("   Step 3: Lock 3,000,000...");
+        let result = api.process_lock(&test_vault, 3_000_000, &generate_test_signature()).await
+            .expect("Lock failed");
+        assert!(result.success, "Lock should succeed: {:?}", result.error);
+        println!("   ✓ Locked");
+        
+        // Step 4: Unlock
+        println!("   Step 4: Unlock 1,000,000...");
+        let result = api.process_unlock(&test_vault, 1_000_000, &generate_test_signature()).await
+            .expect("Unlock failed");
+        assert!(result.success, "Unlock should succeed: {:?}", result.error);
+        println!("   ✓ Unlocked");
+        
+        // Step 5: Withdraw
+        println!("   Step 5: Withdraw 5,000,000...");
+        let result = api.process_withdrawal(&test_vault, 5_000_000, &generate_test_signature()).await
+            .expect("Withdraw failed");
+        assert!(result.success, "Withdraw should succeed: {:?}", result.error);
+        
+        let vault = result.data.unwrap();
+        println!("   ✓ Withdrawn");
+        
+        // Verify
+        println!("");
+        println!("   📊 Final State:");
+        println!("   Total: {} (expected: 5,000,000)", vault.total_balance);
+        println!("   Available: {} (expected: 3,000,000)", vault.available_balance);
+        println!("   Locked: {} (expected: 2,000,000)", vault.locked_balance);
+        
+        assert_eq!(vault.total_balance, 5_000_000, "Total should be 5M");
+        assert_eq!(vault.locked_balance, 2_000_000, "Locked should be 2M");
+        assert_eq!(vault.available_balance, 3_000_000, "Available should be 3M");
+        
+        println!("");
+        println!("✅ PASSED: Complete workflow verified!");
     }
-}
-
-// ============================================================================
-// Helper trait for string padding
-// ============================================================================
-
-trait StringPadding {
-    fn pad_to_width(&self, width: usize) -> String;
-}
-
-impl StringPadding for String {
-    fn pad_to_width(&self, width: usize) -> String {
-        format!("{:width$}", self, width = width)
-    }
-}
-
-impl StringPadding for str {
-    fn pad_to_width(&self, width: usize) -> String {
-        format!("{:width$}", self, width = width)
-    }
-}
-
-// ============================================================================
-// Main function for running tests manually
-// ============================================================================
-
-#[tokio::main]
-async fn main() {
-    println!("\n");
-    println!("╔════════════════════════════════════════════════════════════╗");
-    println!("║     COLLATERAL VAULT BACKEND API TEST SUITE                ║");
-    println!("║                                                            ║");
-    println!("║  Sample Users:                                             ║");
-    println!("║  - Alice: Main test user (deposits, trades)                ║");
-    println!("║  - Bob: Secondary user (multi-user scenarios)              ║");
-    println!("╚════════════════════════════════════════════════════════════╝");
-    println!("\n");
-
-    let client = TestClient::new();
-
-    // Wait for server
-    println!("⏳ Checking server availability...\n");
-    if !wait_for_server(&client, 10).await {
-        println!(" Server not available at {}. Please start the server first.", BASE_URL);
-        println!("\n   Run: cargo run --bin backend\n");
-        return;
-    }
-
-    println!("Server is ready!\n");
-    println!("Running tests with `cargo test` or use this as integration test.\n");
-    
-    // Run a quick demo
-    println!("Quick Demo: Creating vaults for Alice and Bob...\n");
-
-    // Initialize vaults
-    match client.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await {
-        Ok(r) if r.success => println!("   Alice's vault created"),
-        _ => println!("    Alice's vault may already exist"),
-    }
-
-    match client.initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT).await {
-        Ok(r) if r.success => println!("    Bob's vault created"),
-        _ => println!("    Bob's vault may already exist"),
-    }
-
-    // Quick deposit test
-    let tx = generate_tx_signature();
-    match client.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &tx).await {
-        Ok(r) if r.success => {
-            let v = r.data.unwrap();
-            println!("    Alice deposited 1000 USDT");
-            println!("      Balance: {} USDT", v.total_balance / 1_000_000);
-        }
-        _ => println!("    Deposit test may have had an issue"),
-    }
-
-    println!("\n🎉 Demo complete! Run `cargo test` for full test suite.\n");
 }

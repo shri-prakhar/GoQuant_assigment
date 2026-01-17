@@ -173,7 +173,7 @@ async fn build_deposit_transaction(
     };
 
     // Get recent blockhash
-    let recent_blockhash = match state.solana_client.get_latest_blockhash() {
+    let recent_blockhash = match state.solana_client.get_latest_blockhash().await {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to get recent blockhash: {}", e);
@@ -287,7 +287,7 @@ async fn build_withdraw_transaction(
     }
 
     // Get recent blockhash
-    let recent_blockhash = match state.solana_client.get_latest_blockhash() {
+    let recent_blockhash = match state.solana_client.get_latest_blockhash().await {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to get recent blockhash: {}", e);
@@ -384,7 +384,7 @@ async fn build_initialize_transaction(
     }
 
     // Get recent blockhash
-    let recent_blockhash = match state.solana_client.get_latest_blockhash() {
+    let recent_blockhash = match state.solana_client.get_latest_blockhash().await {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to get recent blockhash: {}", e);

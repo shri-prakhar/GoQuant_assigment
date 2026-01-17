@@ -26,6 +26,10 @@ async fn monitor_cycle(state: &AppState) -> Result<(), MonitorError> {
         .map_err(|e| MonitorError::DatabaseError(e.to_string()))?;
     tracing::debug!("Monitoring {} vaults", vaults.len());
     for vault in vaults {
+        if vault.vault_pubkey.len() < 32 || vault.vault_pubkey.len() > 44 {
+            tracing::debug!("Skipping vault with invalid pubkey: {}", vault.vault_pubkey);
+            continue;
+        }
         if let Err(e) = BalanceTracker::verify_balance_invariant(state, &vault.vault_pubkey).await {
             tracing::error!(
                 "Balance invariant check failed for vault {}: {}",

@@ -32,6 +32,11 @@ async fn reconciliation_cycle(state: &AppState) -> Result<(), ReconcilerError> {
 
     for vault in vaults {
         total_vaults += 1;
+         if vault.vault_pubkey.len() < 32 || vault.vault_pubkey.len() > 44 {
+            tracing::warn!("Skipping vault with invalid pubkey format: {}", vault.vault_pubkey);
+            errors += 1;
+            continue;
+        }
         match BalanceTracker::recomcile_balance(state, &vault.vault_pubkey).await {
             Ok(result) => match result.status {
                 crate::services::balance_tracker::ReconciliationStatus::Mismatch => {

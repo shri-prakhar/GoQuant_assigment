@@ -109,7 +109,15 @@ impl BalanceTracker {
             .map_err(|e| BalanceError::DatabaseError(e.to_string()))?
             .ok_or(BalanceError::VaultNotFound)?;
 
-        let on_chain_balance = Self::get_on_chain_balance(state, &vault.token_account).await?;
+        let on_chain_balance = match Self::get_on_chain_balance(state, &vault.token_account).await {
+            Ok(balance) => balance as i64,
+            Err(BalanceError::SolanaRpcError(ref e)) if e.contains("AccountNotFound") => {
+                // Account doesn't exist on-chain yet, treat as 0 balance
+                tracing::debug!("Token account {} not found on-chain, treating as 0 balance", vault.token_account);
+                0
+            }
+            Err(e) => return Err(e),
+        };
         let expected_balance = vault.total_balance;
         let actual_balance = on_chain_balance as i64;
         let discrepancy = actual_balance - expected_balance;
