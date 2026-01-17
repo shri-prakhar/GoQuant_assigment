@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-goquant_assignment = "A9JDc7TrKR5Qyot3W3t6UQaRz4CTgEURemuSUkWfP9hs"
+goquant_assignment = "3sTDJpeRCmXSu9pmkkxjFwYrCHTuoDF3NDWRzFUwKrTg"
 
 [registry]
 url = "https://api.apr.dev"

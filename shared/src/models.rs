@@ -1,98 +1,164 @@
+//! # Shared Data Models
+//!
+//! Common data structures used across the Collateral Vault system.
+//! These models are shared between the backend API and other components.
+//!
+//! ## Core Entities
+//!
+//! - `Vault`: Represents a user's collateral vault
+//! - `TransactionRecord`: Records all vault operations
+//! - `TvlStats`: Total Value Locked statistics
+//! - Various supporting types for alerts, audits, and snapshots
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, types::JsonValue};
 
-#[derive(Debug , Clone , Serialize , Deserialize, FromRow )]
-pub struct Vault{
-  pub vault_pubkey: String,
-  pub owner_pubkey : String,
-  pub token_account : String,
-  pub total_balance : i64,
-  pub locked_balance : i64,
-  pub available_balance : i64,
-  pub total_deposited : i64,
-  pub total_withdrawn : i64,
-  pub created_at : DateTime<Utc>,
-  pub updated_at : DateTime<Utc>,
+/// Represents a collateral vault owned by a user
+///
+/// A vault holds tokens as collateral that can be deposited, withdrawn,
+/// locked for DeFi protocols, or transferred between vaults.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Vault {
+    /// Public key of the vault account on Solana
+    pub vault_pubkey: String,
+    /// Public key of the vault owner
+    pub owner_pubkey: String,
+    /// Associated token account that holds the collateral tokens
+    pub token_account: String,
+    /// Total balance of tokens in the vault (available + locked)
+    pub total_balance: i64,
+    /// Amount of tokens currently locked for DeFi protocols
+    pub locked_balance: i64,
+    /// Amount of tokens available for withdrawal or locking
+    pub available_balance: i64,
+    /// Total amount deposited into this vault over its lifetime
+    pub total_deposited: i64,
+    /// Total amount withdrawn from this vault over its lifetime
+    pub total_withdrawn: i64,
+    /// When the vault was created
+    pub created_at: DateTime<Utc>,
+    /// When the vault was last updated
+    pub updated_at: DateTime<Utc>,
 }
 
 impl Vault {
-  #[inline]
-  pub fn available(&self) -> i64 {
-    self.available_balance
-  }
-  #[inline]
-  pub fn has_available(&self , amount : i64) -> bool {
-    self.available_balance >= amount
-  }
-  #[inline]
-  pub fn has_locked(&self , amount: i64) -> bool {
-    self.locked_balance >= amount
-  }
-  #[inline]
-  pub fn verify_invariant(&self) -> bool {
-    self.total_balance == (self.available_balance + self.locked_balance)
-  }
-  #[inline]
-  pub fn utilization(&self) -> f64 {
-    if self.total_balance == 0 {
-      0.0
-    }else {
-      (self.locked_balance as f64 / self.total_balance as f64) * 100.0
+    /// Get the available balance for operations
+    #[inline]
+    pub fn available(&self) -> i64 {
+        self.available_balance
     }
-  }
+
+    /// Check if vault has sufficient available balance
+    #[inline]
+    pub fn has_available(&self, amount: i64) -> bool {
+        self.available_balance >= amount
+    }
+
+    /// Check if vault has sufficient locked balance
+    #[inline]
+    pub fn has_locked(&self, amount: i64) -> bool {
+        self.locked_balance >= amount
+    }
+
+    /// Verify that the vault's balance invariant holds
+    ///
+    /// The invariant is: total_balance = available_balance + locked_balance
+    #[inline]
+    pub fn verify_invariant(&self) -> bool {
+        self.total_balance == (self.available_balance + self.locked_balance)
+    }
+
+    /// Calculate the utilization percentage of the vault
+    ///
+    /// Returns the percentage of total balance that is locked (0.0 to 100.0)
+    #[inline]
+    pub fn utilization(&self) -> f64 {
+        if self.total_balance == 0 {
+            0.0
+        } else {
+            (self.locked_balance as f64 / self.total_balance as f64) * 100.0
+        }
+    }
 }
 
-#[derive(Debug , Clone , Serialize , Deserialize , FromRow)]
-pub struct TransactionRecord{
-  #[sqlx(default)]
-  pub id : i64,
-  pub vault_pubkey: String,
-  pub tx_signature: String,
-  pub tx_type: String,
-  pub amount: i64,
-  pub from_vault: Option<String>,
-  pub to_vault: Option<String>,
-  pub status: String,
-  pub block_time: Option<i64>,
-  pub slot: Option<i64>,
-  pub created_at :  DateTime<Utc>,
-  pub confirmed_at : Option<DateTime<Utc>>,
-  pub meta : Option<JsonValue>,
+/// Record of a vault transaction/operation
+///
+/// Tracks all operations performed on vaults for audit and history purposes.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TransactionRecord {
+    /// Database primary key
+    #[sqlx(default)]
+    pub id: i64,
+    /// Public key of the vault involved in the transaction
+    pub vault_pubkey: String,
+    /// Solana transaction signature
+    pub tx_signature: String,
+    /// Type of transaction (deposit, withdraw, lock, unlock, transfer)
+    pub tx_type: String,
+    /// Amount of tokens involved in the transaction
+    pub amount: i64,
+    /// Source vault for transfers (optional)
+    pub from_vault: Option<String>,
+    /// Destination vault for transfers (optional)
+    pub to_vault: Option<String>,
+    /// Current status of the transaction
+    pub status: String,
+    /// Solana block time when transaction was confirmed
+    pub block_time: Option<i64>,
+    /// Solana slot number
+    pub slot: Option<i64>,
+    /// When this record was created in the database
+    pub created_at: DateTime<Utc>,
+    /// When the transaction was confirmed on-chain
+    pub confirmed_at: Option<DateTime<Utc>>,
+    /// Additional metadata as JSON
+    pub meta: Option<JsonValue>,
 }
 
-
-#[derive(Debug , Clone , Serialize , Deserialize , PartialEq, Eq)]
+/// Types of vault transactions
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionType {
+    /// Deposit tokens into vault
     Deposit,
+    /// Withdraw tokens from vault
     Withdraw,
+    /// Lock collateral for DeFi use
     Lock,
+    /// Unlock previously locked collateral
     Unlock,
+    /// Transfer collateral between vaults
     Transfer,
 }
 
 impl TransactionType {
+    /// Convert enum to string representation
     pub fn as_str(&self) -> &'static str {
-      match self {
-          TransactionType::Deposit => "deposit",
-          TransactionType::Lock => "lock",
-          TransactionType::Transfer => "transfer",
-          TransactionType::Unlock => "unlock",
-          TransactionType::Withdraw => "withdraw",
-      }
+        match self {
+            TransactionType::Deposit => "deposit",
+            TransactionType::Lock => "lock",
+            TransactionType::Transfer => "transfer",
+            TransactionType::Unlock => "unlock",
+            TransactionType::Withdraw => "withdraw",
+        }
     }
 }
 
+/// Status of a vault transaction
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
+    /// Transaction is pending confirmation
     Pending,
+    /// Transaction has been confirmed on-chain
     Confirmed,
+    /// Transaction failed
     Failed,
 }
 
 impl TransactionStatus {
+    /// Convert enum to string representation
     pub fn as_str(&self) -> &'static str {
         match self {
             TransactionStatus::Pending => "pending",

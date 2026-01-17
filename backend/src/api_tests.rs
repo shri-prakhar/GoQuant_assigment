@@ -459,11 +459,11 @@ async fn wait_for_server(client: &TestClient, max_retries: u32) -> bool {
     for i in 0..max_retries {
         match client.health_check().await {
             Ok(health) if health.status == "ok" => {
-                println!("✅ Server is ready (attempt {})", i + 1);
+                println!("Server is ready (attempt {})", i + 1);
                 return true;
             }
             _ => {
-                println!("⏳ Waiting for server... (attempt {})", i + 1);
+                println!("Waiting for server... (attempt {})", i + 1);
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
@@ -484,7 +484,7 @@ mod health_tests {
         let client = TestClient::new();
         
         if !wait_for_server(&client, 5).await {
-            println!("⚠️ Server not available, skipping test");
+            println!(" Server not available, skipping test");
             return;
         }
 
@@ -493,7 +493,7 @@ mod health_tests {
         
         let health = health.unwrap();
         assert_eq!(health.status, "ok", "Server should be healthy");
-        println!("✅ Health check passed: {:?}", health);
+        println!(" Health check passed: {:?}", health);
     }
 }
 
@@ -509,7 +509,7 @@ mod vault_initialization_tests {
             return;
         }
 
-        println!("\n🔵 Test: Initialize Alice's Vault");
+        println!("\n Test: Initialize Alice's Vault");
         println!("   User: Alice ({})", ALICE_PUBKEY);
 
         let result = client
@@ -522,15 +522,15 @@ mod vault_initialization_tests {
                     let vault = response.data.unwrap();
                     assert_eq!(vault.owner_pubkey, ALICE_PUBKEY);
                     assert_eq!(vault.total_balance, 0);
-                    println!("   ✅ Alice's vault initialized successfully");
+                    println!("   Alice's vault initialized successfully");
                     println!("      Vault: {}", vault.vault_pubkey);
                 } else {
                     // Vault may already exist
-                    println!("   ⚠️ Response: {:?}", response.error);
+                    println!("    Response: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -543,7 +543,7 @@ mod vault_initialization_tests {
             return;
         }
 
-        println!("\n🟢 Test: Initialize Bob's Vault");
+        println!("\n Test: Initialize Bob's Vault");
         println!("   User: Bob ({})", BOB_PUBKEY);
 
         let result = client
@@ -555,13 +555,13 @@ mod vault_initialization_tests {
                 if response.success {
                     let vault = response.data.unwrap();
                     assert_eq!(vault.owner_pubkey, BOB_PUBKEY);
-                    println!("   ✅ Bob's vault initialized successfully");
+                    println!("    Bob's vault initialized successfully");
                 } else {
-                    println!("   ⚠️ Response: {:?}", response.error);
+                    println!("    Response: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -579,7 +579,7 @@ mod deposit_tests {
             return;
         }
 
-        println!("\n💰 Test: Alice Deposits 1000 USDT");
+        println!("\nTest: Alice Deposits 1000 USDT");
 
         // First ensure vault exists
         let _ = client
@@ -600,15 +600,15 @@ mod deposit_tests {
                     let vault = response.data.unwrap();
                     assert!(vault.total_balance >= deposit_amount);
                     assert!(vault.available_balance >= deposit_amount);
-                    println!("   ✅ Deposit successful");
+                    println!("    Deposit successful");
                     println!("      Amount: {} USDT", deposit_amount / 1_000_000);
                     println!("      New Balance: {} USDT", vault.total_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -621,7 +621,7 @@ mod deposit_tests {
             return;
         }
 
-        println!("\n💰 Test: Bob Deposits 500 USDT");
+        println!("\n Test: Bob Deposits 500 USDT");
 
         // Ensure vault exists
         let _ = client
@@ -639,15 +639,15 @@ mod deposit_tests {
             Ok(response) => {
                 if response.success {
                     let vault = response.data.unwrap();
-                    println!("   ✅ Bob's deposit successful");
+                    println!("    Bob's deposit successful");
                     println!("      Amount: {} USDT", deposit_amount / 1_000_000);
                     println!("      New Balance: {} USDT", vault.total_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("   Error: {}", e);
             }
         }
     }
@@ -660,7 +660,7 @@ mod deposit_tests {
             return;
         }
 
-        println!("\n💰 Test: Multiple Deposits for Alice");
+        println!("\n Test: Multiple Deposits for Alice");
 
         let _ = client
             .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
@@ -674,10 +674,10 @@ mod deposit_tests {
             
             match result {
                 Ok(response) if response.success => {
-                    println!("   ✅ Deposited {} USDT", amount / 1_000_000);
+                    println!("    Deposited {} USDT", amount / 1_000_000);
                 }
                 _ => {
-                    println!("   ⚠️ Deposit of {} USDT had issue", amount / 1_000_000);
+                    println!("    Deposit of {} USDT had issue", amount / 1_000_000);
                 }
             }
             
@@ -698,7 +698,7 @@ mod withdrawal_tests {
             return;
         }
 
-        println!("\n💸 Test: Alice Withdraws 200 USDT");
+        println!("\n Test: Alice Withdraws 200 USDT");
 
         // Setup: Initialize and deposit first
         let _ = client
@@ -722,15 +722,15 @@ mod withdrawal_tests {
             Ok(response) => {
                 if response.success {
                     let vault = response.data.unwrap();
-                    println!("   ✅ Withdrawal successful");
+                    println!("    Withdrawal successful");
                     println!("      Amount: {} USDT", withdraw_amount / 1_000_000);
                     println!("      Remaining: {} USDT", vault.total_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -743,7 +743,7 @@ mod withdrawal_tests {
             return;
         }
 
-        println!("\n❌ Test: Withdrawal with Insufficient Balance (Should Fail)");
+        println!("\n Test: Withdrawal with Insufficient Balance (Should Fail)");
 
         let _ = client
             .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
@@ -759,13 +759,13 @@ mod withdrawal_tests {
         match result {
             Ok(response) => {
                 if !response.success {
-                    println!("   ✅ Correctly rejected: {:?}", response.error);
+                    println!("   Correctly rejected: {:?}", response.error);
                 } else {
-                    println!("   ❌ Should have been rejected!");
+                    println!("    Should have been rejected!");
                 }
             }
             Err(_) => {
-                println!("   ✅ Request correctly rejected");
+                println!("    Request correctly rejected");
             }
         }
     }
@@ -783,7 +783,7 @@ mod lock_unlock_tests {
             return;
         }
 
-        println!("\n🔒 Test: Lock Collateral for Alice (Open Position)");
+        println!("\n Test: Lock Collateral for Alice (Open Position)");
 
         // Setup
         let _ = client
@@ -806,15 +806,15 @@ mod lock_unlock_tests {
                 if response.success {
                     let vault = response.data.unwrap();
                     assert!(vault.locked_balance >= lock_amount);
-                    println!("   ✅ Lock successful");
+                    println!("    Lock successful");
                     println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
                     println!("      Available: {} USDT", vault.available_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -827,7 +827,7 @@ mod lock_unlock_tests {
             return;
         }
 
-        println!("\n🔓 Test: Unlock Collateral for Alice (Close Position)");
+        println!("\n Test: Unlock Collateral for Alice (Close Position)");
 
         // Setup: Initialize, deposit, lock
         let _ = client
@@ -850,15 +850,15 @@ mod lock_unlock_tests {
             Ok(response) => {
                 if response.success {
                     let vault = response.data.unwrap();
-                    println!("   ✅ Unlock successful");
+                    println!("    Unlock successful");
                     println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
                     println!("      Available: {} USDT", vault.available_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -876,7 +876,7 @@ mod balance_query_tests {
             return;
         }
 
-        println!("\n📊 Test: Get Alice's Balance");
+        println!("\n Test: Get Alice's Balance");
 
         let _ = client
             .initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT)
@@ -888,16 +888,16 @@ mod balance_query_tests {
             Ok(response) => {
                 if response.success {
                     let vault = response.data.unwrap();
-                    println!("   ✅ Balance retrieved");
+                    println!("    Balance retrieved");
                     println!("      Total: {} USDT", vault.total_balance / 1_000_000);
                     println!("      Available: {} USDT", vault.available_balance / 1_000_000);
                     println!("      Locked: {} USDT", vault.locked_balance / 1_000_000);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -910,7 +910,7 @@ mod balance_query_tests {
             return;
         }
 
-        println!("\n📊 Test: Get Vault by Owner (Bob)");
+        println!("\n Test: Get Vault by Owner (Bob)");
 
         let _ = client
             .initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT)
@@ -923,14 +923,14 @@ mod balance_query_tests {
                 if response.success {
                     let vault = response.data.unwrap();
                     assert_eq!(vault.owner_pubkey, BOB_PUBKEY);
-                    println!("   ✅ Found Bob's vault");
+                    println!("   Found Bob's vault");
                     println!("      Vault: {}", vault.vault_pubkey);
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -943,18 +943,18 @@ mod balance_query_tests {
             return;
         }
 
-        println!("\n❌ Test: Query Nonexistent Vault");
+        println!("\nTest: Query Nonexistent Vault");
 
         let result = client.get_balance("NonExistentVaultPubkeyHere123456789012345").await;
 
         match result {
             Ok(response) => {
                 if !response.success {
-                    println!("   ✅ Correctly returned error: {:?}", response.error);
+                    println!("   Correctly returned error: {:?}", response.error);
                 }
             }
             Err(_) => {
-                println!("   ✅ Correctly rejected request");
+                println!("   Correctly rejected request");
             }
         }
     }
@@ -972,7 +972,7 @@ mod transaction_builder_tests {
             return;
         }
 
-        println!("\n🔨 Test: Build Deposit Transaction for Alice");
+        println!("\n Test: Build Deposit Transaction for Alice");
 
         let result = client
             .build_deposit_tx(
@@ -988,16 +988,16 @@ mod transaction_builder_tests {
                 if response.success {
                     let tx = response.data.unwrap();
                     assert!(!tx.transaction.is_empty() || tx.blockhash.len() > 0);
-                    println!("   ✅ Transaction built successfully");
+                    println!("   Transaction built successfully");
                     println!("      Blockhash: {}", tx.blockhash);
                     println!("      Estimated Fee: {} lamports", tx.estimated_fee);
                     println!("      Message: {}", tx.message);
                 } else {
-                    println!("   ⚠️ Build failed (may need RPC): {:?}", response.error);
+                    println!("    Build failed (may need RPC): {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ⚠️ Error (may need RPC connection): {}", e);
+                println!("    Error (may need RPC connection): {}", e);
             }
         }
     }
@@ -1010,7 +1010,7 @@ mod transaction_builder_tests {
             return;
         }
 
-        println!("\n🔨 Test: Build Withdraw Transaction for Alice");
+        println!("\n Test: Build Withdraw Transaction for Alice");
 
         // First setup vault with balance
         let _ = client
@@ -1033,14 +1033,14 @@ mod transaction_builder_tests {
             Ok(response) => {
                 if response.success {
                     let tx = response.data.unwrap();
-                    println!("   ✅ Withdraw transaction built");
+                    println!("   Withdraw transaction built");
                     println!("      Blockhash: {}", tx.blockhash);
                 } else {
-                    println!("   ⚠️ Build failed: {:?}", response.error);
+                    println!("    Build failed: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ⚠️ Error: {}", e);
+                println!("    Error: {}", e);
             }
         }
     }
@@ -1058,7 +1058,7 @@ mod transaction_history_tests {
             return;
         }
 
-        println!("\n📜 Test: Get Alice's Transaction History");
+        println!("\nTest: Get Alice's Transaction History");
 
         // Setup some transactions
         let _ = client
@@ -1077,7 +1077,7 @@ mod transaction_history_tests {
             Ok(response) => {
                 if response.success {
                     let history = response.data.unwrap();
-                    println!("   ✅ Found {} transactions", history.transactions.len());
+                    println!("    Found {} transactions", history.transactions.len());
                     for tx in history.transactions.iter().take(3) {
                         println!("      - {} | {} | {} USDT", 
                             tx.tx_type, 
@@ -1086,11 +1086,11 @@ mod transaction_history_tests {
                         );
                     }
                 } else {
-                    println!("   ⚠️ Error: {:?}", response.error);
+                    println!("    Error: {:?}", response.error);
                 }
             }
             Err(e) => {
-                println!("   ❌ Error: {}", e);
+                println!("  Error: {}", e);
             }
         }
     }
@@ -1339,7 +1339,7 @@ mod full_workflow_tests {
             }
         }
 
-        println!("\n✅ === MULTI-USER SCENARIO COMPLETE ===\n");
+        println!("\n=== MULTI-USER SCENARIO COMPLETE ===\n");
     }
 }
 
@@ -1384,26 +1384,26 @@ async fn main() {
     // Wait for server
     println!("⏳ Checking server availability...\n");
     if !wait_for_server(&client, 10).await {
-        println!("❌ Server not available at {}. Please start the server first.", BASE_URL);
+        println!(" Server not available at {}. Please start the server first.", BASE_URL);
         println!("\n   Run: cargo run --bin backend\n");
         return;
     }
 
-    println!("✅ Server is ready!\n");
+    println!("Server is ready!\n");
     println!("Running tests with `cargo test` or use this as integration test.\n");
     
     // Run a quick demo
-    println!("📊 Quick Demo: Creating vaults for Alice and Bob...\n");
+    println!("Quick Demo: Creating vaults for Alice and Bob...\n");
 
     // Initialize vaults
     match client.initialize_vault(ALICE_VAULT_PUBKEY, ALICE_PUBKEY, ALICE_TOKEN_ACCOUNT).await {
-        Ok(r) if r.success => println!("   ✅ Alice's vault created"),
-        _ => println!("   ⚠️ Alice's vault may already exist"),
+        Ok(r) if r.success => println!("   Alice's vault created"),
+        _ => println!("    Alice's vault may already exist"),
     }
 
     match client.initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT).await {
-        Ok(r) if r.success => println!("   ✅ Bob's vault created"),
-        _ => println!("   ⚠️ Bob's vault may already exist"),
+        Ok(r) if r.success => println!("    Bob's vault created"),
+        _ => println!("    Bob's vault may already exist"),
     }
 
     // Quick deposit test
@@ -1411,10 +1411,10 @@ async fn main() {
     match client.process_deposit(ALICE_VAULT_PUBKEY, 1_000_000_000, &tx).await {
         Ok(r) if r.success => {
             let v = r.data.unwrap();
-            println!("   ✅ Alice deposited 1000 USDT");
+            println!("    Alice deposited 1000 USDT");
             println!("      Balance: {} USDT", v.total_balance / 1_000_000);
         }
-        _ => println!("   ⚠️ Deposit test may have had an issue"),
+        _ => println!("    Deposit test may have had an issue"),
     }
 
     println!("\n🎉 Demo complete! Run `cargo test` for full test suite.\n");
