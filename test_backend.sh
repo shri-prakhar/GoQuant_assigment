@@ -68,7 +68,7 @@ skip() {
     ((SKIPPED++))
 }
 
-# Check if server is available
+Check if server is available
 check_server() {
     print_test "Server Health Check"
     RESPONSE=$(curl -s -w "\n%{http_code}" $BASE_URL/health 2>/dev/null || echo "000")

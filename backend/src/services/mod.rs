@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 pub use balance_reconciler::*;
 pub use balance_tracker::*;
-use solana_client::rpc_client::RpcClient;
+use solana_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
 use solana_sdk::pubkey::Pubkey;
 pub use transaction_builder::*;
 pub use vault_manager::*;
@@ -25,6 +25,6 @@ pub struct AppState {
     pub database: Database,
     pub cache: Cache,
     pub config: Config,
-    pub solana_client: Arc<RpcClient>,
+    pub solana_client: Arc<AsyncRpcClient>,
     pub program_id: Pubkey,
 }

@@ -256,6 +256,7 @@ impl EventListener {
         // Get recent signatures for the program
         let signatures = self.state.solana_client
             .get_signatures_for_address(&program_id)
+            .await
             .map_err(|e| EventListenerError::RpcError(e.to_string()))?;
 
         let mut new_events = Vec::new();
@@ -316,7 +317,7 @@ impl EventListener {
             .get_transaction(
                 signature,
                 solana_transaction_status::UiTransactionEncoding::Json,
-            )
+            ).await
             .map_err(|e| EventListenerError::RpcError(e.to_string()))?;
 
         let signature_str = signature.to_string();
@@ -774,7 +775,7 @@ impl EventListener {
         let pubkey = Pubkey::from_str(vault_pubkey)
             .map_err(|e| EventListenerError::ParseError(e.to_string()))?;
 
-        match self.state.solana_client.get_account(&pubkey) {
+        match self.state.solana_client.get_account(&pubkey).await {
             Ok(_account) => {
                 // Parse vault account data
                 // In production, you'd use your Anchor program's account parser

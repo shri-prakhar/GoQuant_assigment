@@ -28,9 +28,9 @@ impl CpiManager{
       amount
     )?;
 
-    let recent_blockhash = state.solana_client.get_latest_blockhash().map_err(|e| CPIError::RpcError(e.to_string()))?;
+    let recent_blockhash = state.solana_client.get_latest_blockhash().await.map_err(|e| CPIError::RpcError(e.to_string()))?;
     let transaction = Transaction::new_with_payer(&[lock_ix], None);
-    let signature = state.solana_client.send_and_confirm_transaction(&transaction).map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
+    let signature = state.solana_client.send_and_confirm_transaction(&transaction).await.map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
     tracing::info!("CPI: Lock successful, signature: {}", signature);    
     Ok(signature.to_string())
   }
@@ -60,12 +60,12 @@ impl CpiManager{
       amount
     )?;
 
-    let recent_blockhash = state.solana_client.get_latest_blockhash().map_err(|e| CPIError::RpcError(e.to_string()))?;
+    let recent_blockhash = state.solana_client.get_latest_blockhash().await.map_err(|e| CPIError::RpcError(e.to_string()))?;
     let mut transaction = Transaction::new_with_payer(
       &[unlock_ix],
       None
     );
-    let signature = state.solana_client.send_and_confirm_transaction(&transaction).map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
+    let signature = state.solana_client.send_and_confirm_transaction(&transaction).await.map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
     tracing::info!("CPI: Unlock successful, signature: {}", signature);
         
     Ok(signature.to_string())
@@ -120,7 +120,7 @@ impl CpiManager{
       None
     );
 
-    let signature = state.solana_client.send_and_confirm_transaction(&transaction).map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
+    let signature = state.solana_client.send_and_confirm_transaction(&transaction).await.map_err(|e| CPIError::TransactionFailed(e.to_string()))?;
     tracing::info!("CPI: Transfer successful, signature: {}", signature);
         
     Ok(signature.to_string())

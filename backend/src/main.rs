@@ -36,10 +36,10 @@
 //! - `/api/v1/vault/*` - Vault operations
 //! - `/api/v1/transaction/*` - Transaction building
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use actix_cors::Cors;
 use actix_web::{middleware, web, App, HttpServer};
-use solana_client::rpc_client::RpcClient;
+use solana_client::nonblocking::rpc_client::RpcClient as AsyncRpcClient;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -113,7 +113,7 @@ async fn main() -> Result<(), std::io::Error>{
     tracing::info!(" Cache initialized with 20,000 entry capacity");
 
     // Initialize Solana RPC client
-    let solana_client = RpcClient::new(config.solana_rpc_url.clone());
+    let solana_client = AsyncRpcClient::new(config.solana_rpc_url.clone());
     tracing::info!(" Solana RPC client initialized: {}", config.solana_rpc_url);
 
     // Create shared application state
@@ -142,8 +142,16 @@ async fn main() -> Result<(), std::io::Error>{
     // Event listener - monitor blockchain for vault events
     let event_listener_state = app_state.clone();
     tokio::spawn(async move {
-        tracing::info!(" Spawning Event Listener background task...");
-        event_listner::run_event_listener(event_listener_state).await;
+        loop {
+            let state = event_listener_state.clone();
+            match tokio::spawn(async move {
+                event_listner::run_event_listener(state).await;
+            }).await {
+                Ok(_) => tracing::warn!("Event listener exited, restarting..."),
+                Err(e) => tracing::error!("Event listener panicked: {:?}", e),
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     });
     tracing::info!(" Background services started (monitor, reconciler, event listener)");
 

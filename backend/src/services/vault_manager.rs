@@ -64,6 +64,7 @@ impl VaultManager {
         let account = state
             .solana_client
             .get_account(&pubkey)
+            .await
             .map_err(|e| VaultError::SolanaRpcError(e.to_string()))?;
 
         let vault_data = Self::parse_vault_account(&account.data, vault_pubkey)?;

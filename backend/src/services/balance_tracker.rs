@@ -17,6 +17,7 @@ impl BalanceTracker {
         let account_data = state
             .solana_client
             .get_account_data(&pubkey)
+            .await
             .map_err(|e| BalanceError::SolanaRpcError(e.to_string()))?;
         let token_account = TokenAccount::unpack(&account_data)
             .map_err(|e| BalanceError::DeserializationError(e.to_string()))?;
