@@ -54,17 +54,17 @@ print_test() {
 }
 
 pass() {
-    echo -e "${GREEN}✅ PASS${NC}"
+    echo -e "${GREEN} PASS${NC}"
     ((PASSED++))
 }
 
 fail() {
-    echo -e "${RED}❌ FAIL${NC} - $1"
+    echo -e "${RED} FAIL${NC} - $1"
     ((FAILED++))
 }
 
 skip() {
-    echo -e "${YELLOW}⚠️  SKIP${NC} - $1"
+    echo -e "${YELLOW}  SKIP${NC} - $1"
     ((SKIPPED++))
 }
 

@@ -80,7 +80,7 @@ pub struct HealthResponse {
 
 async fn wait_for_server(client: &Client, max_attempts: u32) -> bool {
     for attempt in 1..=max_attempts {
-        print!("⏳ Waiting for server... (attempt {}/{}) ", attempt, max_attempts);
+        print!("Waiting for server... (attempt {}/{}) ", attempt, max_attempts);
         
         match client.get(HEALTH_URL)
             .timeout(Duration::from_secs(2))
@@ -88,21 +88,21 @@ async fn wait_for_server(client: &Client, max_attempts: u32) -> bool {
             .await 
         {
             Ok(response) if response.status().is_success() => {
-                println!("✅ Server is ready!");
+                println!("Server is ready!");
                 return true;
             }
             Ok(response) => {
-                println!("❌ Status: {}", response.status());
+                println!("Status: {}", response.status());
             }
             Err(e) => {
-                println!("❌ {}", e);
+                println!("{}", e);
             }
         }
         
         tokio::time::sleep(Duration::from_millis(SERVER_WAIT_DELAY_MS)).await;
     }
     
-    println!("❌ Server not available after {} attempts", max_attempts);
+    println!("Server not available after {} attempts", max_attempts);
     false
 }
 
@@ -112,7 +112,7 @@ async fn wait_for_solana(max_attempts: u32) -> bool {
     for attempt in 1..=max_attempts {
         match client.get_version().await {
             Ok(version) => {
-                println!("✅ Solana validator ready (attempt {}) - version: {}", attempt, version.solana_core);
+                println!("Solana validator ready (attempt {}) - version: {}", attempt, version.solana_core);
                 return true;
             }
             Err(_) => {
@@ -123,7 +123,7 @@ async fn wait_for_solana(max_attempts: u32) -> bool {
         }
     }
     
-    println!("❌ Solana validator not available");
+    println!("Solana validator not available");
     false
 }
 
@@ -351,11 +351,11 @@ mod health_tests {
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        println!("\n🧪 TEST: Health Endpoint");
+        println!("\nTEST: Health Endpoint");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!("FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -364,7 +364,7 @@ mod health_tests {
         assert_eq!(health.status, "healthy", "Server should be healthy");
         assert!(!health.version.is_empty(), "Version should not be empty");
         
-        println!("✅ PASSED: Health endpoint working");
+        println!("PASSED: Health endpoint working");
         println!("   Status: {}", health.status);
         println!("   Version: {}", health.version);
         println!("   Uptime: {} seconds", health.uptime_seconds);
@@ -381,25 +381,25 @@ mod solana_rpc_tests {
 
     #[tokio::test]
     async fn test_solana_validator_connection() {
-        println!("\n🧪 TEST: Solana Validator Connection");
+        println!("\n TEST: Solana Validator Connection");
         
         if !wait_for_solana(10).await {
-            panic!("❌ FAILED: Solana validator not available!");
+            panic!(" FAILED: Solana validator not available!");
         }
 
         let solana = SolanaTestClient::new();
         let version = solana.get_version().await.expect("Failed to get version");
         
-        println!("✅ PASSED: Connected to Solana validator");
+        println!(" PASSED: Connected to Solana validator");
         println!("   Version: {}", version);
     }
 
     #[tokio::test]
     async fn test_get_slot() {
-        println!("\n🧪 TEST: Get Current Slot");
+        println!("\n TEST: Get Current Slot");
         
         if !wait_for_solana(10).await {
-            panic!("❌ FAILED: Solana validator not available!");
+            panic!(" FAILED: Solana validator not available!");
         }
 
         let solana = SolanaTestClient::new();
@@ -407,15 +407,15 @@ mod solana_rpc_tests {
         
         assert!(slot > 0, "Slot should be > 0");
         
-        println!("✅ PASSED: Retrieved slot {}", slot);
+        println!(" PASSED: Retrieved slot {}", slot);
     }
 
     #[tokio::test]
     async fn test_get_latest_blockhash() {
-        println!("\n🧪 TEST: Get Latest Blockhash");
+        println!("\n TEST: Get Latest Blockhash");
         
         if !wait_for_solana(10).await {
-            panic!("❌ FAILED: Solana validator not available!");
+            panic!(" FAILED: Solana validator not available!");
         }
 
         let solana = SolanaTestClient::new();
@@ -423,30 +423,30 @@ mod solana_rpc_tests {
         
         assert!(!blockhash.is_empty(), "Blockhash should not be empty");
         
-        println!("✅ PASSED: Blockhash: {}", blockhash);
+        println!(" PASSED: Blockhash: {}", blockhash);
     }
 
     #[tokio::test]
     async fn test_get_balance() {
-        println!("\n🧪 TEST: Get Account Balance");
+        println!("\n TEST: Get Account Balance");
         
         if !wait_for_solana(10).await {
-            panic!("❌ FAILED: Solana validator not available!");
+            panic!(" FAILED: Solana validator not available!");
         }
 
         let solana = SolanaTestClient::new();
         let system_program = "11111111111111111111111111111111";
         let balance = solana.get_balance(system_program).await.expect("Failed");
         
-        println!("✅ PASSED: System Program balance: {} lamports", balance);
+        println!(" PASSED: System Program balance: {} lamports", balance);
     }
 
     #[tokio::test]
     async fn test_rent_exemption() {
-        println!("\n🧪 TEST: Rent Exemption Calculation");
+        println!("\n TEST: Rent Exemption Calculation");
         
         if !wait_for_solana(10).await {
-            panic!("❌ FAILED: Solana validator not available!");
+            panic!(" FAILED: Solana validator not available!");
         }
 
         let solana = SolanaTestClient::new();
@@ -454,7 +454,7 @@ mod solana_rpc_tests {
         
         assert!(rent > 0, "Rent should be > 0");
         
-        println!("✅ PASSED: Rent for 200 bytes: {} lamports ({:.6} SOL)", 
+        println!(" PASSED: Rent for 200 bytes: {} lamports ({:.6} SOL)", 
                  rent, rent as f64 / 1_000_000_000.0);
     }
 }
@@ -469,11 +469,11 @@ mod vault_initialization_tests {
 
     #[tokio::test]
     async fn test_initialize_alice_vault() {
-        println!("\n🧪 TEST: Initialize Alice's Vault");
+        println!("\n TEST: Initialize Alice's Vault");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -481,7 +481,7 @@ mod vault_initialization_tests {
             .expect("Request failed");
 
         // Success or already exists is OK
-        println!("✅ PASSED: Vault initialization handled");
+        println!(" PASSED: Vault initialization handled");
         println!("   Success: {}", result.success);
         if let Some(vault) = &result.data {
             println!("   Vault: {}", vault.vault_pubkey);
@@ -490,18 +490,18 @@ mod vault_initialization_tests {
 
     #[tokio::test]
     async fn test_initialize_bob_vault() {
-        println!("\n🧪 TEST: Initialize Bob's Vault");
+        println!("\n TEST: Initialize Bob's Vault");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
         let result = api.initialize_vault(BOB_VAULT_PUBKEY, BOB_PUBKEY, BOB_TOKEN_ACCOUNT).await
             .expect("Request failed");
 
-        println!("✅ PASSED: Bob's vault handled (success: {})", result.success);
+        println!(" PASSED: Bob's vault handled (success: {})", result.success);
     }
 }
 
@@ -515,13 +515,13 @@ mod deposit_tests {
 
     #[tokio::test]
     async fn test_alice_deposit() {
-        println!("\n🧪 TEST: Alice Deposits 1,000,000 tokens");
-        println!("   ⚠️ REQUIRES: Database fix applied (see database_fix.rs)");
+        println!("\n TEST: Alice Deposits 1,000,000 tokens");
+        println!("    REQUIRES: Database fix applied (see database_fix.rs)");
         
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -544,10 +544,10 @@ mod deposit_tests {
             let error = result.error.unwrap_or_default();
             if error.contains("text = bigint") || error.contains("operator does not exist") {
                 println!("");
-                println!("   ❌ DATABASE BUG DETECTED!");
+                println!("    DATABASE BUG DETECTED!");
                 println!("   Error: {}", error);
                 println!("");
-                println!("   🔧 FIX REQUIRED:");
+                println!("    FIX REQUIRED:");
                 println!("   1. Open backend/src/database.rs");
                 println!("   2. Find update_vault_balances() function");
                 println!("   3. Add 'param_count += 1;' after total_deposited binding");
@@ -561,18 +561,18 @@ mod deposit_tests {
         let vault = result.data.expect("Should have vault data");
         assert!(vault.total_balance >= before + 1_000_000, "Balance should increase");
         
-        println!("✅ PASSED: Deposit successful");
+        println!(" PASSED: Deposit successful");
         println!("   Amount: 1,000,000");
         println!("   New Balance: {}", vault.total_balance);
     }
 
     #[tokio::test]
     async fn test_zero_deposit_rejected() {
-        println!("\n🧪 TEST: Zero Deposit Should Be Rejected");
+        println!("\n TEST: Zero Deposit Should Be Rejected");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -581,16 +581,16 @@ mod deposit_tests {
         let result = api.process_deposit(ALICE_VAULT_PUBKEY, 0, &generate_test_signature()).await
             .expect("Request failed");
 
-        println!("✅ PASSED: Zero deposit handled (success: {})", result.success);
+        println!(" PASSED: Zero deposit handled (success: {})", result.success);
     }
 
     #[tokio::test]
     async fn test_negative_amount_rejected() {
-        println!("\n🧪 TEST: Negative Amount Should Be Rejected");
+        println!("\n TEST: Negative Amount Should Be Rejected");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -600,7 +600,7 @@ mod deposit_tests {
             .expect("Request failed");
 
         assert!(!result.success, "Negative amount should fail");
-        println!("✅ PASSED: Negative amount rejected");
+        println!(" PASSED: Negative amount rejected");
     }
 }
 
@@ -614,11 +614,11 @@ mod withdrawal_tests {
 
     #[tokio::test]
     async fn test_alice_withdrawal() {
-        println!("\n🧪 TEST: Alice Withdraws 500,000 tokens");
+        println!("\n TEST: Alice Withdraws 500,000 tokens");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -633,7 +633,7 @@ mod withdrawal_tests {
             .unwrap_or(0);
         
         if before < 500_000 {
-            println!("⚠️ SKIPPED: Insufficient balance ({})", before);
+            println!(" SKIPPED: Insufficient balance ({})", before);
             return;
         }
         
@@ -641,19 +641,19 @@ mod withdrawal_tests {
             .expect("Request failed");
 
         if result.success {
-            println!("✅ PASSED: Withdrawal successful");
+            println!(" PASSED: Withdrawal successful");
         } else {
-            println!("⚠️ Withdrawal failed: {}", result.error.unwrap_or_default());
+            println!(" Withdrawal failed: {}", result.error.unwrap_or_default());
         }
     }
 
     #[tokio::test]
     async fn test_insufficient_balance_withdrawal() {
-        println!("\n🧪 TEST: Insufficient Balance Should Fail");
+        println!("\n TEST: Insufficient Balance Should Fail");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -663,7 +663,7 @@ mod withdrawal_tests {
             .expect("Request failed");
 
         assert!(!result.success, "Should fail with insufficient balance");
-        println!("✅ PASSED: Insufficient balance rejected");
+        println!(" PASSED: Insufficient balance rejected");
     }
 }
 
@@ -677,11 +677,11 @@ mod lock_unlock_tests {
 
     #[tokio::test]
     async fn test_lock_collateral() {
-        println!("\n🧪 TEST: Lock Collateral");
+        println!("\n TEST: Lock Collateral");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -693,7 +693,7 @@ mod lock_unlock_tests {
         let before = api.get_balance(ALICE_VAULT_PUBKEY).await.ok().and_then(|r| r.data);
         
         if before.as_ref().map(|v| v.available_balance).unwrap_or(0) < 1_000_000 {
-            println!("⚠️ SKIPPED: Insufficient balance for lock");
+            println!(" SKIPPED: Insufficient balance for lock");
             return;
         }
         
@@ -702,20 +702,20 @@ mod lock_unlock_tests {
 
         if result.success {
             let vault = result.data.unwrap();
-            println!("✅ PASSED: Collateral locked");
+            println!(" PASSED: Collateral locked");
             println!("   Locked: {}", vault.locked_balance);
         } else {
-            println!("⚠️ Lock failed: {}", result.error.unwrap_or_default());
+            println!(" Lock failed: {}", result.error.unwrap_or_default());
         }
     }
 
     #[tokio::test]
     async fn test_unlock_collateral() {
-        println!("\n🧪 TEST: Unlock Collateral");
+        println!("\n TEST: Unlock Collateral");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -729,7 +729,7 @@ mod lock_unlock_tests {
         let locked = before.as_ref().map(|v| v.locked_balance).unwrap_or(0);
         
         if locked < 500_000 {
-            println!("⚠️ SKIPPED: No locked funds to unlock");
+            println!(" SKIPPED: No locked funds to unlock");
             return;
         }
         
@@ -737,19 +737,19 @@ mod lock_unlock_tests {
             .expect("Request failed");
 
         if result.success {
-            println!("✅ PASSED: Collateral unlocked");
+            println!(" PASSED: Collateral unlocked");
         } else {
-            println!("⚠️ Unlock failed: {}", result.error.unwrap_or_default());
+            println!(" Unlock failed: {}", result.error.unwrap_or_default());
         }
     }
 
     #[tokio::test]
     async fn test_cannot_lock_more_than_available() {
-        println!("\n🧪 TEST: Cannot Lock More Than Available");
+        println!("\n TEST: Cannot Lock More Than Available");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -759,7 +759,7 @@ mod lock_unlock_tests {
             .expect("Request failed");
 
         assert!(!result.success, "Should fail");
-        println!("✅ PASSED: Over-locking rejected");
+        println!(" PASSED: Over-locking rejected");
     }
 }
 
@@ -773,11 +773,11 @@ mod balance_query_tests {
 
     #[tokio::test]
     async fn test_get_alice_balance() {
-        println!("\n🧪 TEST: Get Alice's Balance");
+        println!("\n TEST: Get Alice's Balance");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -789,7 +789,7 @@ mod balance_query_tests {
         
         let vault = result.data.expect("Should have vault data");
         
-        println!("✅ PASSED: Retrieved balance");
+        println!(" PASSED: Retrieved balance");
         println!("   Total: {}", vault.total_balance);
         println!("   Available: {}", vault.available_balance);
         println!("   Locked: {}", vault.locked_balance);
@@ -797,11 +797,11 @@ mod balance_query_tests {
 
     #[tokio::test]
     async fn test_get_vault_by_owner() {
-        println!("\n🧪 TEST: Get Vault By Owner");
+        println!("\n TEST: Get Vault By Owner");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -809,7 +809,7 @@ mod balance_query_tests {
         
         let result = api.get_vault_by_owner(ALICE_PUBKEY).await.expect("Request failed");
         
-        println!("✅ PASSED: Owner lookup (success: {})", result.success);
+        println!(" PASSED: Owner lookup (success: {})", result.success);
         if let Some(vault) = result.data {
             println!("   Found: {}", vault.vault_pubkey);
         }
@@ -817,11 +817,11 @@ mod balance_query_tests {
 
     #[tokio::test]
     async fn test_nonexistent_vault() {
-        println!("\n🧪 TEST: Query Nonexistent Vault");
+        println!("\n TEST: Query Nonexistent Vault");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -829,7 +829,7 @@ mod balance_query_tests {
             .expect("Request failed");
         
         assert!(!result.success, "Should fail");
-        println!("✅ PASSED: Nonexistent vault handled");
+        println!(" PASSED: Nonexistent vault handled");
     }
 }
 
@@ -843,11 +843,11 @@ mod list_tests {
 
     #[tokio::test]
     async fn test_list_vaults() {
-        println!("\n🧪 TEST: List Vaults");
+        println!("\n TEST: List Vaults");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -857,7 +857,7 @@ mod list_tests {
         
         assert!(result.success, "Should succeed");
         
-        println!("✅ PASSED: Vault list retrieved");
+        println!(" PASSED: Vault list retrieved");
         if let Some(vaults) = result.data {
             println!("   Count: {}", vaults.len());
         }
@@ -874,27 +874,27 @@ mod error_handling_tests {
 
     #[tokio::test]
     async fn test_invalid_pubkey_format() {
-        println!("\n🧪 TEST: Invalid Pubkey Format");
+        println!("\n TEST: Invalid Pubkey Format");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
         let result = api.get_balance("not-valid").await.expect("Request failed");
         
         assert!(!result.success, "Should fail");
-        println!("✅ PASSED: Invalid pubkey rejected");
+        println!(" PASSED: Invalid pubkey rejected");
     }
 
     #[tokio::test]
     async fn test_empty_tx_signature() {
-        println!("\n🧪 TEST: Empty Transaction Signature");
+        println!("\n TEST: Empty Transaction Signature");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -903,7 +903,7 @@ mod error_handling_tests {
         let result = api.process_deposit(ALICE_VAULT_PUBKEY, 1000, "").await
             .expect("Request failed");
 
-        println!("✅ PASSED: Empty signature handled (success: {})", result.success);
+        println!(" PASSED: Empty signature handled (success: {})", result.success);
     }
 }
 
@@ -918,11 +918,11 @@ mod performance_tests {
 
     #[tokio::test]
     async fn test_balance_query_performance() {
-        println!("\n🧪 TEST: Balance Query Performance");
+        println!("\n TEST: Balance Query Performance");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -938,7 +938,7 @@ mod performance_tests {
         let elapsed = start.elapsed();
         let avg_ms = elapsed.as_millis() as f64 / iterations as f64;
         
-        println!("✅ PASSED: Performance measured");
+        println!(" PASSED: Performance measured");
         println!("   {} iterations in {:?}", iterations, elapsed);
         println!("   Average: {:.2}ms per request", avg_ms);
         
@@ -947,11 +947,11 @@ mod performance_tests {
 
     #[tokio::test]
     async fn test_concurrent_requests() {
-        println!("\n🧪 TEST: Concurrent Requests");
+        println!("\n TEST: Concurrent Requests");
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -979,7 +979,7 @@ mod performance_tests {
         
         let elapsed = start.elapsed();
         
-        println!("✅ PASSED: Concurrent requests handled");
+        println!(" PASSED: Concurrent requests handled");
         println!("   {}/10 successful in {:?}", successes, elapsed);
         
         assert!(successes >= 8, "At least 80% should succeed");
@@ -996,15 +996,15 @@ mod full_workflow_tests {
 
     #[tokio::test]
     async fn test_complete_trading_workflow() {
-        println!("\n🧪 TEST: Complete Trading Workflow");
-        println!("   ⚠️ REQUIRES: Database fix applied first!");
+        println!("\n TEST: Complete Trading Workflow");
+        println!("    REQUIRES: Database fix applied first!");
         println!("   Flow: Initialize → Deposit → Lock → Unlock → Withdraw");
         println!("");
         
         let client = create_test_client();
         
         if !wait_for_server(&client, SERVER_WAIT_ATTEMPTS).await {
-            panic!("❌ FAILED: Server not available!");
+            panic!(" FAILED: Server not available!");
         }
 
         let api = TestApiClient::new();
@@ -1032,7 +1032,7 @@ mod full_workflow_tests {
         if !result.success {
             let err = result.error.unwrap_or_default();
             if err.contains("text = bigint") {
-                println!("\n   ❌ DATABASE BUG! Apply fix from database_fix.rs\n");
+                println!("\n    DATABASE BUG! Apply fix from database_fix.rs\n");
                 panic!("Database bug detected!");
             }
             panic!("Deposit failed: {}", err);
@@ -1064,7 +1064,7 @@ mod full_workflow_tests {
         
         // Verify
         println!("");
-        println!("   📊 Final State:");
+        println!("    Final State:");
         println!("   Total: {} (expected: 5,000,000)", vault.total_balance);
         println!("   Available: {} (expected: 3,000,000)", vault.available_balance);
         println!("   Locked: {} (expected: 2,000,000)", vault.locked_balance);
@@ -1074,6 +1074,6 @@ mod full_workflow_tests {
         assert_eq!(vault.available_balance, 3_000_000, "Available should be 3M");
         
         println!("");
-        println!("✅ PASSED: Complete workflow verified!");
+        println!(" PASSED: Complete workflow verified!");
     }
 }

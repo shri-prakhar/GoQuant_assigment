@@ -221,10 +221,10 @@ impl EventListener {
         // Test RPC connection first
         match self.test_rpc_connection().await {
             Ok(_) => {
-                tracing::info!("✅ Event Listener RPC connection verified");
+                tracing::info!(" Event Listener RPC connection verified");
             }
             Err(e) => {
-                tracing::error!("❌ Event Listener RPC connection failed: {}. Will retry...", e);
+                tracing::error!(" Event Listener RPC connection failed: {}. Will retry...", e);
                 // Don't exit - continue anyway, polling loop will handle retries
             }
         }
@@ -274,7 +274,7 @@ impl EventListener {
 
                     if consecutive_errors >= max_consecutive_errors {
                         tracing::error!(
-                            "❌ Too many consecutive errors ({}), backing off for 30 seconds",
+                            " Too many consecutive errors ({}), backing off for 30 seconds",
                             consecutive_errors
                         );
                         tokio::time::sleep(Duration::from_secs(30)).await;
@@ -551,7 +551,7 @@ impl EventListener {
         // Update TVL
         self.update_tvl().await?;
 
-        tracing::info!("✅ Deposit event processed successfully");
+        tracing::info!(" Deposit event processed successfully");
         Ok(())
     }
 
@@ -620,7 +620,7 @@ impl EventListener {
         // Update TVL
         self.update_tvl().await?;
 
-        tracing::info!("✅ Withdraw event processed successfully");
+        tracing::info!(" Withdraw event processed successfully");
         Ok(())
     }
 
@@ -679,7 +679,7 @@ impl EventListener {
         // Broadcast via WebSocket
         broadcast_lock(&vault_pubkey, amount, new_locked, new_available).await;
 
-        tracing::info!("✅ Lock event processed successfully");
+        tracing::info!(" Lock event processed successfully");
         Ok(())
     }
 
@@ -738,7 +738,7 @@ impl EventListener {
         // Broadcast via WebSocket
         broadcast_unlock(&vault_pubkey, amount, new_locked, new_available).await;
 
-        tracing::info!("✅ Unlock event processed successfully");
+        tracing::info!(" Unlock event processed successfully");
         Ok(())
     }
 
@@ -783,7 +783,7 @@ impl EventListener {
             tracing::warn!("Failed to sync to vault {}: {}", to_vault, e);
         }
 
-        tracing::info!("✅ Transfer event processed successfully");
+        tracing::info!(" Transfer event processed successfully");
         Ok(())
     }
 
@@ -834,7 +834,7 @@ impl EventListener {
         // Update TVL
         self.update_tvl().await?;
 
-        tracing::info!("✅ Vault initialized event processed successfully");
+        tracing::info!(" Vault initialized event processed successfully");
         Ok(())
     }
 
@@ -891,7 +891,7 @@ pub enum EventListenerError {
 
 /// Start the event listener as a background task
 pub async fn run_event_listener(state: Data<AppState>) {
-    tracing::info!("🚀 Initializing Event Listener...");
+    tracing::info!(" Initializing Event Listener...");
     
     let config = EventListenerConfig::default();
     let mut listener = EventListener::new(state, config);
@@ -900,7 +900,7 @@ pub async fn run_event_listener(state: Data<AppState>) {
     listener.start().await;
     
     // If we get here, something went wrong
-    tracing::error!("❌ Event Listener unexpectedly exited!");
+    tracing::error!(" Event Listener unexpectedly exited!");
 }
 
 /// Start event listener with custom configuration
@@ -908,10 +908,10 @@ pub async fn run_event_listener_with_config(
     state: Data<AppState>,
     config: EventListenerConfig,
 ) {
-    tracing::info!("🚀 Initializing Event Listener with custom config...");
+    tracing::info!(" Initializing Event Listener with custom config...");
     
     let mut listener = EventListener::new(state, config);
     listener.start().await;
     
-    tracing::error!("❌ Event Listener unexpectedly exited!");
+    tracing::error!(" Event Listener unexpectedly exited!");
 }

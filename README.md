@@ -2,7 +2,7 @@
 
 A comprehensive collateral vault management system built on Solana blockchain using Anchor framework. This system allows users to deposit, withdraw, lock, and unlock collateral tokens while maintaining real-time synchronization between on-chain state and off-chain database.
 
-## 🏗️ Architecture
+##  Architecture
 
 ### System Components
 
@@ -39,7 +39,7 @@ Event Listener ← WebSocket/Polling ← Solana RPC ← Events
 Database Update → Cache Invalidation → WebSocket Broadcast → Frontend
 ```
 
-## � Project Structure
+##  Project Structure
 
 ```
 goquant_assignment/
@@ -86,7 +86,7 @@ goquant_assignment/
 └── target/                    # Build artifacts
 ```
 
-## �🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -301,7 +301,7 @@ Update types:
 - `unlock`: Collateral unlocked
 - `tvl_update`: Total Value Locked changes
 
-## 🧪 Testing
+##  Testing
 
 ### Backend Tests
 
@@ -323,7 +323,7 @@ cargo run --bin api_tests
 anchor test
 ```
 
-## 🔧 Configuration
+##  Configuration
 
 ### Environment Variables
 
@@ -339,7 +339,7 @@ anchor test
 | `RECONCILIATION_INTERVAL_SECONDS` | Balance reconciliation interval | `3600`                          |
 | `MONITORING_INTERVAL_SECONDS`     | Monitoring interval             | `60`                            |
 
-## 📊 Monitoring & Metrics
+##  Monitoring & Metrics
 
 ### Health Endpoints
 
